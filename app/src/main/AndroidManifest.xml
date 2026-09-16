@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Android 13+ 把"后台弹 Toast"跟这个权限挂钩了，不用它发真正的通知，只是要这个权限
+         「已开启」这个状态，触发/识别结果的 Toast 提示才不会被系统静默吞掉 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 长按音量上键拍照那个入口用；不要求设备一定有相机（虽然手机基本都有） -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+    <!-- 待办事项顺带同步到系统日历，借用日历自带的提醒通知 -->
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <uses-permission android:name="android.permission.WRITE_CALENDAR" />
+    <!-- 长按音量上/下键悬浮弹出相机小工具 / 文字输入框用，不这个权限没法用 WindowManager
+         在别的 App 上面画东西；需要在系统设置里手动开一次，不是普通的运行时权限弹窗 -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <application
+        android:name=".ScreenIntakeApp"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.ScreenIntake">
+
+        <!-- 主界面 / 设置 -->
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true"
+            android:theme="@style/Theme.ScreenIntake">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- 处理「待确认」通知上的确认/编辑动作，只接受本 App 自己发出的通知，不对外暴露 -->
+        <receiver
+            android:name=".capture.CaptureConfirmReceiver"
+            android:exported="false" />
+
+        <!-- 无障碍服务：同时按下音量上+下键触发，直接读取当前屏幕的文字节点并分类写入；
+             长按单独一个音量键则悬浮弹出文字输入框 / 拍照小工具（WindowManager 悬浮窗，
+             不是 Activity，所以不需要在这里额外注册） -->
+        <service
+            android:name=".capture.ScreenIntakeAccessibilityService"
+            android:exported="true"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:label="@string/accessibility_service_label">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+    </application>
+</manifest>

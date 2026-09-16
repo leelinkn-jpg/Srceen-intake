@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  「秒记」图标：一个实心圆点 + 两圈向外扩散的水波纹，表达「按一下，瞬间完成」——
+  跟原来那个截屏/相框造型的占位图标已经没关系，换成跟新定位（快速记录、一步操作）
+  更贴的意象。背景色沿用原来的品牌绿（见 colors.xml 的 ic_launcher_background）。
+  三个圆都用同一种「两段半圆弧拼一个整圆」的写法，保证是规规矩矩的正圆。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 外圈水波纹（最淡） -->
+    <path
+        android:pathData="M54,25 A29,29 0 1,0 54,83 A29,29 0 1,0 54,25 Z"
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3"
+        android:strokeAlpha="0.28" />
+
+    <!-- 内圈水波纹 -->
+    <path
+        android:pathData="M54,33 A21,21 0 1,0 54,75 A21,21 0 1,0 54,33 Z"
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3"
+        android:strokeAlpha="0.55" />
+
+    <!-- 中心实心点：代表「按一下」这个动作本身 -->
+    <path
+        android:pathData="M54,41 A13,13 0 1,0 54,67 A13,13 0 1,0 54,41 Z"
+        android:fillColor="#FFFFFF" />
+
+</vector>

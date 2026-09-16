@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">秒记</string>
+    <string name="accessibility_service_label">秒记 · 音量键触发</string>
+    <string name="accessibility_service_description">同时按下音量上+下键时，对当前屏幕拍一张静默截图（没有截屏动画和提示音，不会保存到相册或任何文件），发给模型判断后自动分类保存；长按单独一个音量键会悬浮弹出文字输入框或拍照取景窗。单独短按任一音量键不受影响，正常调节音量。</string>
+</resources>

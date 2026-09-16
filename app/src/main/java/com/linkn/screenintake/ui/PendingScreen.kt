@@ -1,0 +1,557 @@
+package com.linkn.screenintake.ui
+
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import com.linkn.screenintake.ScreenIntakeApp
+import com.linkn.screenintake.capture.CaptureConfirmActions
+import com.linkn.screenintake.capture.PendingCaptureNotifier
+import com.linkn.screenintake.classify.Categories
+import com.linkn.screenintake.classify.ClassifyResult
+import com.linkn.screenintake.store.PendingDraft
+import com.linkn.screenintake.store.RecordStore
+import com.linkn.screenintake.store.UnconfirmedNote
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+
+/**
+ * 底部导航「待确认」那个 Tab 的内容——以前只在首页/顶部横幅露个数字，点了也没
+ * 地方去，现在是真正能操作的地方：读屏/拍照弹出来还没点确认或编辑就被划掉的通知，草稿
+ * 都还在这里，可以直接确认、编辑内容后再确认、或者整条丢弃，不用非得等下次再触发一次
+ * 通知。跟财务/待办/灵感一样是个普通 Tab 内容，没有自己的 Scaffold/顶栏——外层
+ * [MainScaffold] 统一提供。
+ *
+ * 数据（drafts/notes/loading）不在这里自己读，由 [MainScaffold] 统一读取后传进来，跟角标
+ * 数字共用同一份——避免每次切进这个 Tab 都要重新读一遍「待确认」文件夹才有内容，读取慢的
+ * 时候会有一瞬间看着像没内容。这里只在增删改后通过 [onReload] 通知外层重新读一遍。
+ *
+ * 分两段：上面是真正「待确认」的草稿（有结构化数据，能操作），下面是纯粹的失败排查记录
+ * （分类失败/读屏读到空文字这些，没法「确认」成什么，只能看/删）。旧版本存的草稿（还没
+ * 加机读 JSON 之前）没法解析出结构化数据，会退化成「只能看/删」的样子，不会导致崩溃。
+ */
+@Composable
+fun PendingScreen(
+    drafts: List<PendingDraft>,
+    notes: List<UnconfirmedNote>,
+    loading: Boolean,
+    onReload: () -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val folderUri = ScreenIntakeApp.instance.settingsStore.folderUri
+
+    var editingDraft by remember { mutableStateOf<PendingDraft?>(null) }
+    // 点卡片本身（不是下面那几个按钮）是「看完整内容」，跟「编辑」分开——编辑是要改内容，
+    // 这个纯粹是内容被截断看不全时，点进去看全乎的原文。
+    var detailDraft by remember { mutableStateOf<PendingDraft?>(null) }
+    var detailNote by remember { mutableStateOf<UnconfirmedNote?>(null) }
+
+    fun act(block: suspend () -> Unit) {
+        scope.launch(Dispatchers.IO) {
+            block()
+            onReload()
+        }
+    }
+
+    if (drafts.isEmpty() && notes.isEmpty()) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            if (loading) {
+                CircularProgressIndicator()
+            } else {
+                Text("没有待确认的内容", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    } else {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            items(drafts, key = { it.draftId }) { draft ->
+                DraftCard(
+                    draft = draft,
+                    onClick = { detailDraft = draft },
+                    onConfirm = {
+                        act {
+                            val result = draft.result ?: return@act
+                            CaptureConfirmActions.confirmOrEdit(context, draft.draftId, result, null)
+                            PendingCaptureNotifier.cancel(context, draft.draftId.hashCode())
+                        }
+                    },
+                    onEdit = { editingDraft = draft },
+                    onDelete = {
+                        act {
+                            RecordStore(context).deletePendingDraft(folderUri, draft.draftId)
+                            PendingCaptureNotifier.cancel(context, draft.draftId.hashCode())
+                        }
+                    }
+                )
+            }
+            if (notes.isNotEmpty()) {
+                item {
+                    Text(
+                        "识别失败的记录",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            items(notes, key = { it.fileName }) { note ->
+                NoteCard(
+                    note = note,
+                    onClick = { detailNote = note },
+                    onDelete = {
+                        act { RecordStore(context).deleteUnconfirmedNote(folderUri, note.fileName) }
+                    }
+                )
+            }
+        }
+    }
+
+    // onEdit 只在 DraftCard 显示了「编辑」按钮时触发，而那个按钮只在 result != null 时才会
+    // 出现，所以这里的 draft.result 理论上不会是 null；万一是（理论上不会发生），干脆不弹
+    // 对话框，避免在组合过程中直接写状态。
+    editingDraft?.result?.let { result ->
+        val draft = editingDraft!!
+        EditDraftDialog(
+            result = result,
+            onDismiss = { editingDraft = null },
+            onSubmit = { editedText, dueAt ->
+                editingDraft = null
+                act {
+                    CaptureConfirmActions.confirmOrEdit(context, draft.draftId, result, editedText, dueAt)
+                    PendingCaptureNotifier.cancel(context, draft.draftId.hashCode())
+                }
+            }
+        )
+    }
+
+    detailDraft?.let { draft ->
+        DraftDetailDialog(draft = draft, onDismiss = { detailDraft = null })
+    }
+    detailNote?.let { note ->
+        NoteDetailDialog(note = note, onDismiss = { detailNote = null })
+    }
+}
+
+@Composable
+private fun DraftCard(
+    draft: PendingDraft,
+    onClick: () -> Unit,
+    onConfirm: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val result = draft.result
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            if (result != null) {
+                Text(result.typeLabel(), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                Text(result.displaySummary(), style = MaterialTheme.typography.bodyLarge)
+            } else {
+                Text("旧版草稿（缺少结构化数据，只能看/删）", style = MaterialTheme.typography.labelLarge)
+            }
+            if (draft.screenText.isNotBlank()) {
+                Text(
+                    draft.screenText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 3,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+            }
+            // 待办事项必须有具体提醒时间，不能靠「确认」原样放行一条没有时间的待办——
+            // 模型没抽出 dueAt 的话，这里就不出「确认」按钮，只留「编辑」，逼着走时间
+            // 选择器把时间补上（见 EditDraftDialog）。其余类型（支出/收入/灵感/忽略）
+            // 没有这条限制，正常显示两个按钮。
+            val missingDueTime = result != null && result.isTodo && result.dueAt.isNullOrBlank()
+            if (missingDueTime) {
+                Text(
+                    "缺具体提醒时间，点「编辑」补上才能确认",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+            }
+            // 股票交易确认后会直接计入持仓的滚动计算，不像消费/收入记错了还能在财务列表里
+            // 直接改——这里提示一下，代码/股数/价格不对的话，删掉重来比编辑更保险。
+            if (result != null && result.isTrade) {
+                Text(
+                    "确认后会计入持仓，代码/股数/价格不对的话建议直接删除重新截图或重新打字",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+            }
+            // 持仓设置确认后会直接覆盖这只股票当前的股数/成本（不是累加）——同样提示一下，
+            // 数字不对就删掉重来，比编辑更保险。
+            if (result != null && result.isHolding) {
+                Text(
+                    "确认后会直接覆盖这只股票的持仓状态，代码/股数/成本不对的话建议直接删除重新截图或重新打字",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+            }
+            // 转账确认后会同时改动转出/转入两张卡各自的余额——同样提示一下，账户或金额
+            // 认错了就删掉重来，比编辑更保险（编辑框只能加备注，改不了转出/转入的账户）。
+            if (result != null && result.isTransfer) {
+                Text(
+                    "确认后会同时改动转出/转入两张卡的余额，账户或金额不对的话建议直接删除重新截图或重新打字",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                horizontalArrangement = Arrangement.End
+            ) {
+                TextButton(onClick = onDelete) {
+                    Text("删除", color = MaterialTheme.colorScheme.error)
+                }
+                if (result != null) {
+                    TextButton(onClick = onEdit) { Text("编辑") }
+                    if (!missingDueTime) {
+                        Button(onClick = onConfirm) { Text("确认") }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun NoteCard(note: UnconfirmedNote, onClick: () -> Unit, onDelete: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                note.content,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 6
+            )
+            Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = onDelete) {
+                    Text("删除", color = MaterialTheme.colorScheme.error)
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun EditDraftDialog(
+    result: ClassifyResult,
+    onDismiss: () -> Unit,
+    onSubmit: (String, String?) -> Unit
+) {
+    val prefill = if (result.isIgnore) "" else if (result.isExpense || result.isIncome) {
+        result.category.orEmpty()
+    } else {
+        result.summary.orEmpty()
+    }
+    var text by remember { mutableStateOf(prefill) }
+
+    // 记账/收入类编辑的其实是「分类」这个固定枚举字段（见 ClassifyResult.withEdit），
+    // 与其每次都手打「餐饮」「日用」这几个高频词，不如把 Categories 里定好的那份列表
+    // 摆成一排可点的常用选项——点一下直接把分类文本填好，还想再改字/打别的词，
+    // 下面的输入框仍然可以直接编辑，两者不冲突。忽略/待办/灵感这些改的是自由文本
+    // （summary），没有固定分类可选，不显示这一排。
+    val quickCategories = when {
+        result.isExpense -> Categories.EXPENSE
+        result.isIncome -> Categories.INCOME
+        else -> emptyList()
+    }
+
+    // 待办事项必须有具体提醒时间——不管是截屏/拍照识别出来本来就没抽到时间，还是
+    // 手动打字时模型漏抽了，都要能在这个弹窗里用系统的日期+时间选择器直接补上，
+    // 不能只靠文本框里手打（打字既麻烦又没法保证格式对，dueAt 需要严格的
+    // yyyy-MM-ddTHH:mm:ss）。有旧值就带出来当初始值，方便只是想改一下时间点的情况。
+    var pickedDueAt by remember {
+        mutableStateOf(
+            if (result.isTodo) result.dueAt?.let {
+                try { java.time.LocalDateTime.parse(it) } catch (e: Exception) { null }
+            } else null
+        )
+    }
+    val context = LocalContext.current
+    val dueAtDisplay = pickedDueAt?.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+
+    fun launchDateTimePicker() {
+        val base = pickedDueAt ?: java.time.LocalDateTime.now().plusDays(1).withHour(9).withMinute(0)
+        android.app.DatePickerDialog(
+            context,
+            { _, year, month, dayOfMonth ->
+                android.app.TimePickerDialog(
+                    context,
+                    { _, hour, minute ->
+                        pickedDueAt = java.time.LocalDateTime.of(year, month + 1, dayOfMonth, hour, minute)
+                    },
+                    base.hour,
+                    base.minute,
+                    true
+                ).show()
+            },
+            base.year,
+            base.monthValue - 1,
+            base.dayOfMonth
+        ).show()
+    }
+
+    val canSubmit = text.isNotBlank() && (!result.isTodo || pickedDueAt != null)
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier
+                    .padding(20.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text("编辑", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(result.editHint(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (quickCategories.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        quickCategories.forEach { cat ->
+                            FilterChip(
+                                selected = text == cat,
+                                onClick = { text = cat },
+                                label = { Text(cat) }
+                            )
+                        }
+                    }
+                }
+                if (result.isTodo) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = dueAtDisplay ?: "",
+                            onValueChange = {},
+                            readOnly = true,
+                            enabled = false,
+                            label = { Text("提醒时间") },
+                            placeholder = { Text("未设置，必须选一个") },
+                            modifier = Modifier.weight(1f)
+                        )
+                        Button(onClick = { launchDateTimePicker() }) {
+                            Text(if (pickedDueAt == null) "选择时间" else "改时间")
+                        }
+                    }
+                    if (pickedDueAt == null) {
+                        Text(
+                            "待办事项必须设置具体提醒时间，不然存了也提醒不了你",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    label = { Text(result.editHint()) },
+                    minLines = 2,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) { Text("取消") }
+                    Button(
+                        onClick = {
+                            val dueAtIso = if (result.isTodo) {
+                                pickedDueAt?.format(java.time.format.DateTimeFormatter.ISO_LOCAL_DATE_TIME)
+                            } else null
+                            onSubmit(text.trim(), dueAtIso)
+                        },
+                        enabled = canSubmit
+                    ) { Text("提交") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DraftDetailDialog(draft: PendingDraft, onDismiss: () -> Unit) {
+    val result = draft.result
+    Dialog(onDismissRequest = onDismiss) {
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier
+                    .padding(20.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                if (result != null) {
+                    Text(result.typeLabel(), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text(result.displaySummary(), style = MaterialTheme.typography.bodyLarge)
+                } else {
+                    Text("旧版草稿（缺少结构化数据）", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                }
+                if (draft.screenText.isNotBlank()) {
+                    Text("原始内容", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(draft.screenText, style = MaterialTheme.typography.bodyMedium)
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) { Text("关闭") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun NoteDetailDialog(note: UnconfirmedNote, onDismiss: () -> Unit) {
+    Dialog(onDismissRequest = onDismiss) {
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier
+                    .padding(20.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+          ) {
+                Text("识别失败的记录", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(note.content, style = MaterialTheme.typography.bodyMedium)
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) { Text("关闭") }
+                }
+            }
+        }
+    }
+}
+
+private enum class InboxSubTab { PENDING, TODO, NOTE }
+
+/**
+ * 顶部齿轮按钮旁边那个带角标的图标打开的「收件箱」，取代了原来单独占一个 Tab 位置的
+ * 「待确认」——现在整个底部导航按财务/健康/工作/习惯这四个领域分（见 [BottomTab]），
+ * 待确认这个 AI 拿不准要人工确认的队列本质上是跨领域的，硬塞进某一个领域 Tab 里，一条
+ * 被 AI 分错领域的草稿就会变得找不到，所以刻意保持全局、不按领域拆分（这是跟用户明确
+ * 讨论过的决定）。同一个入口下面另外顺带装了「全部待办」「全部灵感」两个子视图——待办/
+ * 灵感现在基本都集中在工作领域，直接完整展示在 [WorkScreen] 里；这里的全部待办/全部灵感
+ * 子视图是给其它领域（或分类分错的）零星条目留的一个全局出口。
+ *
+ * initialDomain 非空时（从某个领域 Tab 的「查看全部」点进来），默认落在「全部待办」子
+ * 视图并且预先按这个领域筛好；不传（从顶部图标直接点进来）则默认落在「待确认」，也不
+ * 做任何领域筛选——两种入口场景下第一眼看到的东西都符合点进来之前的预期。
+ */
+@Composable
+fun InboxScreen(
+    resumeTick: Int,
+    drafts: List<PendingDraft>,
+    notes: List<UnconfirmedNote>,
+    loading: Boolean,
+    onReload: () -> Unit,
+    initialDomain: String? = null
+) {
+    var subTab by remember(initialDomain) {
+        mutableStateOf(if (initialDomain != null) InboxSubTab.TODO else InboxSubTab.PENDING)
+    }
+    var domainFilter by remember(initialDomain) { mutableStateOf(initialDomain) }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            FilterChip(
+                selected = subTab == InboxSubTab.PENDING,
+                onClick = { subTab = InboxSubTab.PENDING },
+                label = { Text("待确认（${drafts.size + notes.size}）") }
+            )
+            FilterChip(
+                selected = subTab == InboxSubTab.TODO,
+                onClick = { subTab = InboxSubTab.TODO },
+                label = { Text("全部待办") }
+            )
+            FilterChip(
+                selected = subTab == InboxSubTab.NOTE,
+                onClick = { subTab = InboxSubTab.NOTE },
+                label = { Text("全部灵感") }
+            )
+        }
+
+        if (subTab != InboxSubTab.PENDING) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                FilterChip(selected = domainFilter == null, onClick = { domainFilter = null }, label = { Text("全部") })
+                ClassifyResult.DOMAINS.forEach { d ->
+                    FilterChip(selected = domainFilter == d, onClick = { domainFilter = d }, label = { Text(d) })
+                }
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+        }
+
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            when (subTab) {
+                InboxSubTab.PENDING -> PendingScreen(
+                    drafts = drafts,
+                    notes = notes,
+                    loading = loading,
+                    onReload = onReload
+                )
+                InboxSubTab.TODO -> TodoListScreen(resumeTick = resumeTick, domainFilter = domainFilter)
+                InboxSubTab.NOTE -> NoteListScreen(resumeTick = resumeTick, domainFilter = domainFilter)
+            }
+        }
+    }
+}
