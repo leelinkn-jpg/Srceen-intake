@@ -1,6 +1,7 @@
 package com.linkn.screenintake.ui
 
 import android.graphics.Bitmap
+import android.util.LruCache
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -616,10 +617,13 @@ private fun PhotoRow(
 @Composable
 private fun PhotoThumbnail(folderUri: String, category: String, fileName: String) {
     val context = LocalContext.current
-    var bitmap by remember(fileName) { mutableStateOf<Bitmap?>(null) }
-    LaunchedEffect(fileName, category) {
-        bitmap = withContext(Dispatchers.IO) {
-            LedgerReader.loadPhotoThumbnail(context, folderUri, category, fileName)
+    val cacheKey = "$folderUri/$category/$fileName"
+    var bitmap by remember(cacheKey) { mutableStateOf(photoThumbnailCache.get(cacheKey)) }
+    LaunchedEffect(cacheKey) {
+        if (bitmap == null) {
+            bitmap = withContext(Dispatchers.IO) {
+                LedgerReader.loadPhotoThumbnail(context, folderUri, category, fileName, maxSize = 128)
+            }?.also { photoThumbnailCache.put(cacheKey, it) }
         }
     }
     Box(
@@ -637,6 +641,12 @@ private fun PhotoThumbnail(folderUri: String, category: String, fileName: String
             )
         }
     }
+}
+
+/** Keeps already-seen list thumbnails in memory while the app remains open.
+ * 12 MB is enough for dozens of 128px previews without retaining full camera photos. */
+private val photoThumbnailCache = object : LruCache<String, Bitmap>(12 * 1024) {
+    override fun sizeOf(key: String, value: Bitmap): Int = value.allocationByteCount / 1024
 }
 
 private val photoTimeFmt = java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.CHINA)

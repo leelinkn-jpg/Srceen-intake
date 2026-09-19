@@ -12,6 +12,13 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -130,8 +137,8 @@ class MainActivity : ComponentActivity() {
                         if (openPending > 0) showSettings = false
                     }
 
-                    when {
-                        showOnboarding -> OnboardingScreen(
+                    if (showOnboarding) {
+                        OnboardingScreen(
                             onOpenAccessibility = { openAccessibilitySettings() },
                             onOpenOverlaySettings = { openOverlaySettings() },
                             onDone = {
@@ -139,7 +146,21 @@ class MainActivity : ComponentActivity() {
                                 showOnboarding = false
                             }
                         )
-                        showSettings -> {
+                    } else AnimatedContent(
+                        targetState = showSettings,
+                        modifier = Modifier.fillMaxSize(),
+                        transitionSpec = {
+                            if (targetState) {
+                                (fadeIn(tween(220)) + slideInHorizontally(tween(220)) { it / 10 }) togetherWith
+                                    (fadeOut(tween(150)) + slideOutHorizontally(tween(150)) { -it / 16 })
+                            } else {
+                                (fadeIn(tween(220)) + slideInHorizontally(tween(220)) { -it / 12 }) togetherWith
+                                    (fadeOut(tween(150)) + slideOutHorizontally(tween(150)) { it / 18 })
+                            }
+                        },
+                        label = "settings-page-content"
+                    ) { settingsVisible ->
+                        if (settingsVisible) {
                             // 设置页是叠在主界面上面的一层状态，不是系统返回栈里单独的一页——
                             // 点左上角的返回箭头会走 onBack 正常回到主界面，但系统自带的返回
                             // 手势（屏幕边缘往里滑）默认不知道这个状态，会直接把整个 Activity
@@ -155,8 +176,7 @@ class MainActivity : ComponentActivity() {
                                 onPickFolder = { folderPicker.launch(null) },
                                 onBack = { showSettings = false }
                             )
-                        }
-                        else -> MainScaffold(
+                        } else MainScaffold(
                             currentTab = currentTab,
                             onTabSelected = { currentTab = it },
                             onOpenSettings = { showSettings = true },
