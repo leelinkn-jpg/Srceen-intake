@@ -122,7 +122,9 @@ fun HealthScreen(resumeTick: Int) {
     var exercises by remember { mutableStateOf(UiDataCache.exercises) }
     var nutrition by remember { mutableStateOf<NutritionSummary?>(null) }
     var editingWeight by remember { mutableStateOf<WeightRow?>(null) }
-    var tab by remember { mutableStateOf(HealthTab.WEIGHT) }
+    // Keep every primary domain consistent: entering it always starts at the
+    // first secondary page rather than restoring a special-case detail page.
+    var tab by remember { mutableStateOf(HealthTab.MEAL) }
 
     suspend fun reload() = coroutineScope {
         val weightsResult = async(Dispatchers.IO) {

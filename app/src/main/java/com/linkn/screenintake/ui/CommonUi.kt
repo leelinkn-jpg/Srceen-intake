@@ -65,6 +65,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -75,6 +76,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.lerp
 import androidx.compose.ui.window.Dialog
 import com.linkn.screenintake.ScreenIntakeApp
 import com.linkn.screenintake.classify.Categories
@@ -155,10 +157,34 @@ internal fun UnifiedSectionTabs(
     onSelected: (Int) -> Unit,
     pagerState: PagerState? = null
 ) {
+    val indicatorColor = MaterialTheme.colorScheme.primary
     ScrollableTabRow(
         selectedTabIndex = selectedIndex,
         modifier = Modifier.fillMaxWidth(),
-        edgePadding = 0.dp
+        edgePadding = 0.dp,
+        // The Canvas occupies the tab-row indicator layer, but only paints a 3dp
+        // line at its bottom.  Unlike a fixed tab indicator, its position is
+        // interpolated from the pager's live drag offset.
+        indicator = { positions ->
+            if (positions.isNotEmpty()) {
+                val current = (pagerState?.currentPage ?: selectedIndex)
+                    .coerceIn(0, positions.lastIndex)
+                val offset = pagerState?.currentPageOffsetFraction ?: 0f
+                val target = (current + if (offset >= 0f) 1 else -1)
+                    .coerceIn(0, positions.lastIndex)
+                val progress = kotlin.math.abs(offset).coerceIn(0f, 1f)
+                val left = lerp(positions[current].left, positions[target].left, progress)
+                val width = lerp(positions[current].width, positions[target].width, progress)
+                Canvas(Modifier.fillMaxSize()) {
+                    val lineHeight = 3.dp.toPx()
+                    drawRect(
+                        color = indicatorColor,
+                        topLeft = Offset(left.toPx(), size.height - lineHeight),
+                        size = Size(width.toPx(), lineHeight)
+                    )
+                }
+            }
+        }
     ) {
         labels.forEachIndexed { index, label ->
             Tab(
