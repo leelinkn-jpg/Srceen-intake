@@ -136,7 +136,7 @@ fun TodoListScreen(resumeTick: Int, domainFilter: String? = null) {
 
     val buckets = if (domainFilter == null) listOf("工作", "其他", "已办") else listOf("待办", "已办")
     val selectedBucketIndex = buckets.indexOf(selectedBucket).coerceAtLeast(0)
-    val pagerState = rememberSyncedSectionPagerState(selectedBucketIndex, buckets.size) { selectedBucket = buckets[it] }
+    val visible = visibleFor(selectedBucket)
     Column(Modifier.fillMaxSize()) {
         if (operationError.isNotBlank()) Text(operationError, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), color = MaterialTheme.colorScheme.error)
         UnifiedSectionTabs(
@@ -150,18 +150,14 @@ fun TodoListScreen(resumeTick: Int, domainFilter: String? = null) {
                 "$bucket（$count）"
             },
             selectedIndex = selectedBucketIndex,
-            onSelected = { selectedBucket = buckets[it] },
-            pagerState = pagerState
+            onSelected = { selectedBucket = buckets[it] }
         )
 
-        SectionPager(pagerState, Modifier.weight(1f).fillMaxWidth()) { page ->
-            val bucket = buckets[page]
-            val visible = visibleFor(bucket)
-            if (visible.isEmpty()) {
-                EmptyHint(if (bucket == "已办") "还没有已办的事项" else "这里还没有待办")
-            } else {
+        if (visible.isEmpty()) {
+            EmptyHint(if (selectedBucket == "已办") "还没有已办的事项" else "这里还没有待办")
+        } else {
             LazyColumn(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.weight(1f).fillMaxWidth(),
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
@@ -201,7 +197,6 @@ fun TodoListScreen(resumeTick: Int, domainFilter: String? = null) {
                         }
                     }
                 }
-            }
             }
         }
     }
