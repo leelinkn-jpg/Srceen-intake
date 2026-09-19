@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -66,6 +67,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -107,6 +109,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import com.linkn.screenintake.report.ReportDomain
 import com.linkn.screenintake.health.AlcoholCandidate
 import com.linkn.screenintake.health.AlcoholRecord
@@ -510,6 +514,7 @@ private fun WeightEditDialog(row: WeightRow, onDismiss: () -> Unit, onSave: (Str
 private fun PhotoGalleryView(category: String, folderUri: String) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
     var photos by remember(category) { mutableStateOf(UiDataCache.photos[category].orEmpty()) }
     var mealNotes by remember(category) { mutableStateOf(if (category == "meal") UiDataCache.mealNotes else emptyList()) }
 
@@ -535,12 +540,33 @@ private fun PhotoGalleryView(category: String, folderUri: String) {
         return
     }
 
+    // Keep the next few images warm while the user reads the current screen.
+    // This does the disk work on IO before a fast swipe needs those thumbnails.
+    LaunchedEffect(photos, mealNotes.size, category, folderUri) {
+        snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1 }
+            .distinctUntilChanged()
+            .collectLatest { lastVisibleIndex ->
+                val nextPhotoIndex = (lastVisibleIndex - mealNotes.size + 1).coerceAtLeast(0)
+                val upcoming = photos.drop(nextPhotoIndex).take(4)
+                withContext(Dispatchers.IO) {
+                    upcoming.forEach { photo ->
+                        val key = photoThumbnailKey(folderUri, photo.category, photo.fileName)
+                        if (photoThumbnailCache.get(key) == null) {
+                            LedgerReader.loadPhotoThumbnail(context, folderUri, photo.category, photo.fileName, maxSize = 96)
+                                ?.also { photoThumbnailCache.put(key, it) }
+                        }
+                    }
+                }
+            }
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        state = listState,
+        contentPadding = RecordListContentPadding,
+        verticalArrangement = Arrangement.spacedBy(RecordListSpacing)
     ) {
-        items(mealNotes, key = { "meal-note-${it.index}" }) { note ->
+        items(mealNotes, key = { "meal-note-${it.index}" }, contentType = { "meal-note" }) { note ->
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(note.text, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
@@ -548,7 +574,7 @@ private fun PhotoGalleryView(category: String, folderUri: String) {
                 }
             }
         }
-        items(photos, key = { it.fileName }) { photo ->
+        items(photos, key = { it.fileName }, contentType = { "photo-row" }) { photo ->
             PhotoRow(
                 photo = photo,
                 folderUri = folderUri,
@@ -617,12 +643,12 @@ private fun PhotoRow(
 @Composable
 private fun PhotoThumbnail(folderUri: String, category: String, fileName: String) {
     val context = LocalContext.current
-    val cacheKey = "$folderUri/$category/$fileName"
+    val cacheKey = photoThumbnailKey(folderUri, category, fileName)
     var bitmap by remember(cacheKey) { mutableStateOf(photoThumbnailCache.get(cacheKey)) }
     LaunchedEffect(cacheKey) {
         if (bitmap == null) {
             bitmap = withContext(Dispatchers.IO) {
-                LedgerReader.loadPhotoThumbnail(context, folderUri, category, fileName, maxSize = 128)
+                LedgerReader.loadPhotoThumbnail(context, folderUri, category, fileName, maxSize = 96)
             }?.also { photoThumbnailCache.put(cacheKey, it) }
         }
     }
@@ -648,6 +674,8 @@ private fun PhotoThumbnail(folderUri: String, category: String, fileName: String
 private val photoThumbnailCache = object : LruCache<String, Bitmap>(12 * 1024) {
     override fun sizeOf(key: String, value: Bitmap): Int = value.allocationByteCount / 1024
 }
+
+private fun photoThumbnailKey(folderUri: String, category: String, fileName: String) = "$folderUri/$category/$fileName"
 
 private val photoTimeFmt = java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.CHINA)
 

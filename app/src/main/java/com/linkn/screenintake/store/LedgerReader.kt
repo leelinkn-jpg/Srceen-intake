@@ -582,7 +582,12 @@ object LedgerReader {
             while (bounds.outWidth / sample > maxSize || bounds.outHeight / sample > maxSize) {
                 sample *= 2
             }
-            val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+            val opts = BitmapFactory.Options().apply {
+                inSampleSize = sample
+                // Camera photos do not need an alpha channel in a tiny list preview.
+                // Halving each preview's memory reduces GC pauses during fast scrolling.
+                inPreferredConfig = Bitmap.Config.RGB_565
+            }
             context.contentResolver.openInputStream(file.uri)?.use {
                 BitmapFactory.decodeStream(it, null, opts)
             }
