@@ -227,8 +227,15 @@ fun MainScaffold(
                 targetState = secondaryPage,
                 modifier = Modifier.fillMaxSize(),
                 transitionSpec = {
-                    (fadeIn(animationSpec = tween(220)) + slideInHorizontally(animationSpec = tween(220)) { it / 12 }) togetherWith
-                        (fadeOut(animationSpec = tween(150)) + slideOutHorizontally(animationSpec = tween(150)) { -it / 16 })
+                    // Match Settings exactly: secondary pages enter from the
+                    // right, and returning home reverses the same motion.
+                    if (targetState != null) {
+                        (fadeIn(tween(220)) + slideInHorizontally(tween(220)) { it / 10 }) togetherWith
+                            (fadeOut(tween(150)) + slideOutHorizontally(tween(150)) { -it / 16 })
+                    } else {
+                        (fadeIn(tween(220)) + slideInHorizontally(tween(220)) { -it / 12 }) togetherWith
+                            (fadeOut(tween(150)) + slideOutHorizontally(tween(150)) { it / 18 })
+                    }
                 },
                 label = "secondary-page-content"
             ) { page ->

@@ -552,7 +552,7 @@ private fun PhotoGalleryView(category: String, folderUri: String) {
                     upcoming.forEach { photo ->
                         val key = photoThumbnailKey(folderUri, photo.category, photo.fileName)
                         if (photoThumbnailCache.get(key) == null) {
-                            LedgerReader.loadPhotoThumbnail(context, folderUri, photo.category, photo.fileName, maxSize = 96)
+                            LedgerReader.loadPhotoThumbnail(context, folderUri, photo.category, photo.fileName, maxSize = 224)
                                 ?.also { photoThumbnailCache.put(key, it) }
                         }
                     }
@@ -648,7 +648,7 @@ private fun PhotoThumbnail(folderUri: String, category: String, fileName: String
     LaunchedEffect(cacheKey) {
         if (bitmap == null) {
             bitmap = withContext(Dispatchers.IO) {
-                LedgerReader.loadPhotoThumbnail(context, folderUri, category, fileName, maxSize = 96)
+                LedgerReader.loadPhotoThumbnail(context, folderUri, category, fileName, maxSize = 224)
             }?.also { photoThumbnailCache.put(cacheKey, it) }
         }
     }
@@ -670,8 +670,8 @@ private fun PhotoThumbnail(folderUri: String, category: String, fileName: String
 }
 
 /** Keeps already-seen list thumbnails in memory while the app remains open.
- * 12 MB is enough for dozens of 128px previews without retaining full camera photos. */
-private val photoThumbnailCache = object : LruCache<String, Bitmap>(12 * 1024) {
+ * 20 MB keeps high-density previews clear without retaining full camera photos. */
+private val photoThumbnailCache = object : LruCache<String, Bitmap>(20 * 1024) {
     override fun sizeOf(key: String, value: Bitmap): Int = value.allocationByteCount / 1024
 }
 
