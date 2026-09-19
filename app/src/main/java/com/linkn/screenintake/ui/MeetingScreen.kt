@@ -27,10 +27,12 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -174,10 +176,11 @@ fun MeetingScreen(resumeTick: Int) {
                     meetingName = record.name.ifBlank { MeetingRecord.defaultName(record.createdAt, record.testOnly) }
                 },
                 footer = {
+                    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp) {
                     Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                         TextButton(
                             onClick = { playback(record) }, enabled = !live.busy && !playbackLoading,
-                            modifier = Modifier.heightIn(min = 36.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                            modifier = Modifier.heightIn(min = 32.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
                         ) {
                             Text(if (playingId == record.id) "停止" else "播放")
                         }
@@ -187,11 +190,12 @@ fun MeetingScreen(resumeTick: Int) {
                                 runCatching { withContext(Dispatchers.IO) { repo.transcriptText(record) } }
                                     .onSuccess { detail = it }.onFailure { error = it.message.orEmpty() }
                             }
-                        }, modifier = Modifier.heightIn(min = 36.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text("文字") }
+                        }, modifier = Modifier.heightIn(min = 32.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text("文字") }
                         if (!record.synced) TextButton(enabled = !live.busy, onClick = {
                             work(MeetingRecorderService.EXPORT, record)
-                        }, modifier = Modifier.heightIn(min = 36.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text("重新同步") }
-                        TextButton(enabled = !live.busy, onClick = { deleteTarget = record }, modifier = Modifier.heightIn(min = 36.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text("删除") }
+                        }, modifier = Modifier.heightIn(min = 32.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text("重新同步") }
+                        TextButton(enabled = !live.busy, onClick = { deleteTarget = record }, modifier = Modifier.heightIn(min = 32.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text("删除") }
+                    }
                     }
                 }
             )

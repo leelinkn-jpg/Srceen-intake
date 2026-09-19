@@ -111,6 +111,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.sync.withPermit
 import com.linkn.screenintake.report.ReportDomain
 import com.linkn.screenintake.health.AlcoholCandidate
 import com.linkn.screenintake.health.AlcoholRecord
@@ -249,8 +250,8 @@ fun HealthScreen(resumeTick: Int) {
                     modifier = Modifier
                         .fillMaxSize()
                         .verticalScroll(rememberScrollState())
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(RecordListSpacing)
                 ) {
                     TrendCard(
                         title = "体重趋势",
@@ -527,7 +528,12 @@ private fun PhotoGalleryView(category: String, folderUri: String) {
     }
 
     val changeTick = DataChangeSignal.tick.value
-    LaunchedEffect(category, folderUri, changeTick) { reload() }
+    // Do not compete with the bottom-tab transition on its first animation frame.
+    // The cached list stays visible immediately; the file refresh follows shortly.
+    LaunchedEffect(category, folderUri, changeTick) {
+        kotlinx.coroutines.delay(180)
+        reload()
+    }
 
     if (photos.isEmpty() && mealNotes.isEmpty()) {
         EmptyHint(
@@ -551,10 +557,7 @@ private fun PhotoGalleryView(category: String, folderUri: String) {
                 withContext(Dispatchers.IO) {
                     upcoming.forEach { photo ->
                         val key = photoThumbnailKey(folderUri, photo.category, photo.fileName)
-                        if (photoThumbnailCache.get(key) == null) {
-                            LedgerReader.loadPhotoThumbnail(context, folderUri, photo.category, photo.fileName, maxSize = 224)
-                                ?.also { photoThumbnailCache.put(key, it) }
-                        }
+                        loadAndCacheThumbnail(context, folderUri, photo.category, photo.fileName, key)
                     }
                 }
             }
@@ -648,8 +651,8 @@ private fun PhotoThumbnail(folderUri: String, category: String, fileName: String
     LaunchedEffect(cacheKey) {
         if (bitmap == null) {
             bitmap = withContext(Dispatchers.IO) {
-                LedgerReader.loadPhotoThumbnail(context, folderUri, category, fileName, maxSize = 224)
-            }?.also { photoThumbnailCache.put(cacheKey, it) }
+                loadAndCacheThumbnail(context, folderUri, category, fileName, cacheKey)
+            }
         }
     }
     Box(
@@ -676,6 +679,23 @@ private val photoThumbnailCache = object : LruCache<String, Bitmap>(20 * 1024) {
 }
 
 private fun photoThumbnailKey(folderUri: String, category: String, fileName: String) = "$folderUri/$category/$fileName"
+
+// Decoding several camera images at once causes all their GPU uploads to land on
+// the same frame. A tiny queue intentionally favours smooth scrolling over an
+// instantaneous burst of thumbnails.
+private val photoDecodeSemaphore = kotlinx.coroutines.sync.Semaphore(2)
+
+private suspend fun loadAndCacheThumbnail(
+    context: android.content.Context,
+    folderUri: String,
+    category: String,
+    fileName: String,
+    cacheKey: String = photoThumbnailKey(folderUri, category, fileName)
+): Bitmap? = photoDecodeSemaphore.withPermit {
+    photoThumbnailCache.get(cacheKey) ?: LedgerReader
+        .loadPhotoThumbnail(context, folderUri, category, fileName, maxSize = 224)
+        ?.also { photoThumbnailCache.put(cacheKey, it) }
+}
 
 private val photoTimeFmt = java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.CHINA)
 
