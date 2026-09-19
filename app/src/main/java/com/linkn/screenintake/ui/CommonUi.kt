@@ -135,7 +135,18 @@ internal fun UnifiedSectionTabs(
                 val progress = kotlin.math.abs(state?.currentPageOffsetFraction ?: 0f).coerceIn(0f, 1f)
                 val left = lerp(positions[from].left, positions[to].left, progress)
                 val width = lerp(positions[from].width, positions[to].width, progress)
-                TabRowDefaults.SecondaryIndicator(Modifier.offset(x = left).width(width))
+                // SecondaryIndicator internally requests fillMaxWidth, which conflicts with
+                // an interpolated tab width and can turn the indicator into a large block.
+                // Keep a full-width track, then draw only the moving 3dp line inside it.
+                Box(Modifier.fillMaxWidth().height(3.dp)) {
+                    Box(
+                        Modifier
+                            .offset(x = left)
+                            .width(width)
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.primary)
+                    )
+                }
             }
         }
     ) {
