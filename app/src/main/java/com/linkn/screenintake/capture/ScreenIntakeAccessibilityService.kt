@@ -76,6 +76,42 @@ class ScreenIntakeAccessibilityService : AccessibilityService() {
     private var pendingLongPressUpRunnable: Runnable? = null
     private var pendingLongPressDownRunnable: Runnable? = null
 
+    private var meetingOverlay: android.widget.TextView? = null
+
+    private fun updateMeetingOverlay(text: String?) {
+        val manager = getSystemService(android.view.WindowManager::class.java)
+        if (text == null) {
+            meetingOverlay?.let { runCatching { manager.removeView(it) } }
+            meetingOverlay = null
+            return
+        }
+        if (meetingOverlay == null) {
+            val label = android.widget.TextView(this).apply {
+                textSize = 12f
+                setTextColor(android.graphics.Color.WHITE)
+                setBackgroundColor(0xDD263238.toInt())
+                setPadding(18, 12, 18, 12)
+                contentDescription = "结束会议录音"
+                setOnClickListener {
+                    startService(android.content.Intent(this@ScreenIntakeAccessibilityService,
+                        com.linkn.screenintake.meeting.MeetingRecorderService::class.java)
+                        .setAction(com.linkn.screenintake.meeting.MeetingRecorderService.STOP))
+                }
+            }
+            val params = android.view.WindowManager.LayoutParams(
+                android.view.WindowManager.LayoutParams.WRAP_CONTENT,
+                android.view.WindowManager.LayoutParams.WRAP_CONTENT,
+                android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+                android.graphics.PixelFormat.TRANSLUCENT).apply {
+                gravity = android.view.Gravity.TOP or android.view.Gravity.END
+                x = 12; y = (100 * resources.displayMetrics.density).toInt()
+            }
+            runCatching { manager.addView(label, params); meetingOverlay = label }
+        }
+        meetingOverlay?.text = text
+    }
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instanceRef = WeakReference(this)
@@ -262,6 +298,7 @@ class ScreenIntakeAccessibilityService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        updateMeetingOverlay(null)
         pendingLongPressUpRunnable?.let { handler.removeCallbacks(it) }
         pendingLongPressDownRunnable?.let { handler.removeCallbacks(it) }
         scope.cancel()
@@ -291,6 +328,12 @@ class ScreenIntakeAccessibilityService : AccessibilityService() {
         private var instanceRef: WeakReference<ScreenIntakeAccessibilityService>? = null
 
         fun isRunning(): Boolean = instanceRef?.get() != null
+
+        /** 可见录音状态与停止按钮，不修改会议的音频焦点或输出设备。 */
+        fun showMeetingRecordingStatus(text: String?) {
+            val service = instanceRef?.get() ?: return
+            service.handler.post { service.updateMeetingOverlay(text) }
+        }
 
         /** 供设置页里「测试整条链路」按钮调用，截的是当前（也就是本 App）屏幕。 */
         fun requestCapture(): Boolean {

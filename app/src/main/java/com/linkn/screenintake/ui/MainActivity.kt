@@ -16,14 +16,26 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import com.linkn.screenintake.ScreenIntakeApp
 import com.linkn.screenintake.capture.ScreenIntakeAccessibilityService
+import com.linkn.screenintake.capture.PendingCaptureNotifier
+import com.linkn.screenintake.meeting.MeetingRecorderService
+import com.linkn.screenintake.report.AiReportNotificationWorker
+import com.linkn.screenintake.store.SyncNotificationWorker
+import com.linkn.screenintake.store.LocalDataIndexWorker
 import com.linkn.screenintake.ui.theme.ScreenIntakeTheme
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.Lifecycle
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
 
@@ -34,8 +46,11 @@ class MainActivity : ComponentActivity() {
     // 每次回到前台都 +1：单纯用来让「待确认」数量这类不在 folderChosen/accessibilityReady
     // 里的状态，也能在你切回这个 App 时被重新读一次。
     private val resumeTick = mutableStateOf(0)
+    private val pendingOpenTick = mutableStateOf(0)
+    private val meetingOpenTick = mutableStateOf(0)
+    private val reportOpenTick = mutableStateOf(0)
 
-    // 只用来让"后台 Toast 不被 Android 13+ 静默吞掉"，这个 App 不会真的发通知
+    // Android 13+ 的确认通知、AI 报告通知和待办提醒都需要这个权限。
     private val notifPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { /* 拒绝的话，触发/识别结果的 Toast 提示可能不会显示，但震动反馈不受影响 */ }
@@ -44,12 +59,6 @@ class MainActivity : ComponentActivity() {
     private val cameraPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { /* 拒绝的话，长按音量上键会再问一次；一直拒绝就用不了拍照这个入口 */ }
-
-    // 待办同步日历要读写日历，两个权限一起问；拒绝的话待办.md 照常写，只是不会同步到日历、
-    // 收不到日历的原生提醒
-    private val calendarPermission = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { /* 拒绝也不影响待办.md 本身的记录，CalendarSync 里会自己检查权限、没有就跳过 */ }
 
     private val folderPicker = registerForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
@@ -60,6 +69,7 @@ class MainActivity : ComponentActivity() {
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             )
             ScreenIntakeApp.instance.settingsStore.folderUri = uri.toString()
+            LocalDataIndexWorker.refresh(this)
             folderChosen.value = true
             Toast.makeText(this, "保存位置已设置", Toast.LENGTH_SHORT).show()
         }
@@ -67,27 +77,58 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                while (true) {
+                    SyncNotificationWorker.scanNow(this@MainActivity)
+                    AiReportNotificationWorker.scanNow(this@MainActivity)
+                    delay(30_000)
+                }
+            }
+        }
+        if (intent?.action == PendingCaptureNotifier.ACTION_OPEN_PENDING) pendingOpenTick.value += 1
+        if (intent?.action == MeetingRecorderService.OPEN_MEETINGS) meetingOpenTick.value += 1
+        if (intent?.action == AiReportNotificationWorker.OPEN_REPORTS) reportOpenTick.value += 1
         maybeRequestNotificationPermission()
         maybeRequestCameraPermission()
-        maybeRequestCalendarPermission()
         folderChosen.value = ScreenIntakeApp.instance.settingsStore.folderUri.isNotBlank()
         accessibilityReady.value = ScreenIntakeAccessibilityService.isRunning()
         overlayPermissionOk.value = Settings.canDrawOverlays(this)
 
         setContent {
             ScreenIntakeTheme {
+                var snapshotReady by remember { mutableStateOf(false) }
+                LaunchedEffect(Unit) {
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        com.linkn.screenintake.store.UiSnapshot.load(applicationContext, ScreenIntakeApp.instance.settingsStore.folderUri)
+                    }
+                    snapshotReady = true
+                }
+                if (!snapshotReady) {
+                    androidx.compose.material3.LinearProgressIndicator()
+                    return@ScreenIntakeTheme
+                }
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
                     val store = ScreenIntakeApp.instance.settingsStore
-                    var showOnboarding by remember { mutableStateOf(!store.onboardingDone) }
-                    var showSettings by remember { mutableStateOf(false) }
-                    var currentTab by remember { mutableStateOf(BottomTab.FINANCE) }
+                    var showOnboarding by rememberSaveable { mutableStateOf(!store.onboardingDone) }
+                    var showSettings by rememberSaveable { mutableStateOf(false) }
+                    var currentTab by rememberSaveable { mutableStateOf(BottomTab.WORK) }
                     val folderOk by folderChosen
                     val a11yOk by accessibilityReady
                     val overlayOk by overlayPermissionOk
                     val tick by resumeTick
+                    val openPending by pendingOpenTick
+                    val openMeeting by meetingOpenTick
+                    val openReport by reportOpenTick
+                    LaunchedEffect(openMeeting) {
+                        if (openMeeting > 0) { showSettings = false; currentTab = BottomTab.WORK }
+                    }
+                    LaunchedEffect(openPending) {
+                        if (openPending > 0) showSettings = false
+                    }
 
                     when {
                         showOnboarding -> OnboardingScreen(
@@ -119,7 +160,10 @@ class MainActivity : ComponentActivity() {
                             currentTab = currentTab,
                             onTabSelected = { currentTab = it },
                             onOpenSettings = { showSettings = true },
-                            resumeTick = tick
+                            resumeTick = tick,
+                            pendingOpenTick = openPending,
+                            meetingOpenTick = openMeeting,
+                            reportOpenTick = openReport
                         )
                     }
                 }
@@ -127,12 +171,27 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (intent.action == PendingCaptureNotifier.ACTION_OPEN_PENDING) pendingOpenTick.value += 1
+        if (intent.action == MeetingRecorderService.OPEN_MEETINGS) meetingOpenTick.value += 1
+        if (intent.action == AiReportNotificationWorker.OPEN_REPORTS) reportOpenTick.value += 1
+    }
+
     override fun onResume() {
         super.onResume()
+        com.linkn.screenintake.store.StorageLayout.invalidateExternalHandles(
+            ScreenIntakeApp.instance.settingsStore.folderUri
+        )
         folderChosen.value = ScreenIntakeApp.instance.settingsStore.folderUri.isNotBlank()
         accessibilityReady.value = ScreenIntakeAccessibilityService.isRunning()
         overlayPermissionOk.value = Settings.canDrawOverlays(this)
         resumeTick.value += 1
+        // Syncthing 可能在 App 退到后台时刚把报告写进来。回到前台立即扫一次，避免必须
+        // 等下一轮 15 分钟后台任务；后台仍由周期任务负责发现新报告并发通知。
+        AiReportNotificationWorker.scanNow(this)
+        SyncNotificationWorker.scanNow(this)
     }
 
     private fun maybeRequestNotificationPermission() {
@@ -150,18 +209,6 @@ class MainActivity : ComponentActivity() {
             != PackageManager.PERMISSION_GRANTED
         ) {
             cameraPermission.launch(Manifest.permission.CAMERA)
-        }
-    }
-
-    private fun maybeRequestCalendarPermission() {
-        val needsRead = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CALENDAR) !=
-            PackageManager.PERMISSION_GRANTED
-        val needsWrite = ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_CALENDAR) !=
-            PackageManager.PERMISSION_GRANTED
-        if (needsRead || needsWrite) {
-            calendarPermission.launch(
-                arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR)
-            )
         }
     }
 

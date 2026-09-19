@@ -7,6 +7,7 @@ import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import java.text.SimpleDateFormat
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 
 /** 账本.csv 里的一行，type 是"支出"或"收入"，跟 [RecordStore] 写进去的列一一对应。
  * index 是这一行在文件里（表头之后）从 0 开始数的原始位置，不受列表展示时按日期排序
@@ -23,7 +24,15 @@ data class LedgerRow(
 /** index 语义同上：待办.md 里所有 "- [ ]"/"- [x]" 行，按文件里出现的原始顺序从 0 数起。
  * domain 是这条待办归到"财务、健康、工作、习惯、其他"里的哪一个，从行首 "[域名]" 标签解析出来，
  * 没有这个标签的老数据（这个功能上线之前记的）统一兜底成"其他"，不当成解析失败。 */
-data class TodoItem(val done: Boolean, val text: String, val domain: String, val index: Int)
+data class TodoItem(
+    val done: Boolean,
+    val text: String,
+    val domain: String,
+    val index: Int,
+    val dueAt: String? = null,
+    val reminderId: String? = null
+)
+data class MealNote(val date: String, val text: String, val index: Int)
 
 /** index 语义同上：灵感.md 里所有 "## " 块，按文件里出现的原始顺序从 0 数起。
  * domain 语义同 [TodoItem]，从 heading 开头的 "[域名]" 标签解析，没有就兜底"其他"。 */
@@ -103,11 +112,30 @@ data class HealthMetricRow(
     val respiratoryRate: Double?,
     val sleepHours: Double?,
     val sleepEfficiency: Double?,
+    val sleepPerformance: Double?,
+    val sleepConsistency: Double?,
+    val lightSleepHours: Double?,
+    val deepSleepHours: Double?,
+    val remSleepHours: Double?,
+    val awakeHours: Double?,
     val strain: Double?,
     val avgHeartRate: Double?,
     val maxHeartRate: Double?,
     val calories: Double?,
     val note: String
+)
+
+data class DigitalAppUsage(val name: String, val minutes: Int, val feed: Boolean, val growth: Boolean = false)
+data class DigitalHealthRow(val date: String, val totalMinutes: Int, val apps: List<DigitalAppUsage>, val summary: String)
+data class ExerciseRow(
+    val startedAt: String,
+    val endedAt: String,
+    val type: String,
+    val strain: Double?,
+    val averageHeartRate: Double?,
+    val maxHeartRate: Double?,
+    val calories: Double?,
+    val distanceMeters: Double?
 )
 
 /**
@@ -127,6 +155,64 @@ data class PhotoItem(
 )
 
 object LedgerReader {
+    private val strict = ThreadLocal<Boolean>()
+    private val readVersions = ThreadLocal<MutableMap<String, String>?>()
+    internal fun <T> withStrictReads(block: () -> T): T {
+        val previous = strict.get()
+        val previousVersions = readVersions.get()
+        if (previous != true) readVersions.set(mutableMapOf())
+        strict.set(true)
+        try { return block() } finally { strict.set(previous); readVersions.set(previousVersions) }
+    }
+    internal fun expectedText(uri: String): String? = readVersions.get()?.get(uri)
+    internal fun didWrite(uri: String, content: String) { readVersions.get()?.set(uri, content) }
+    private fun <T> failedRead(context: Context, error: Exception, fallback: List<T>): List<T> {
+        if (strict.get() == true) throw IllegalStateException("读取原记录失败，已停止保存", error)
+        SystemStatus.failure(context, "读取", "部分文件读取失败，保留上次内容，请检查同步目录")
+        return fallback
+    }
+    private fun readableRoot(context: Context, folderUri: String): DocumentFile {
+        val root = DocumentFile.fromTreeUri(context, Uri.parse(folderUri)) ?: error("同步目录不可访问")
+        check(root.canRead()) { "同步目录读取权限已失效" }
+        return root
+    }
+
+    private data class TextCacheEntry(
+        val lastModified: Long,
+        val length: Long,
+        val text: String
+    )
+
+    private val textCache = ConcurrentHashMap<String, TextCacheEntry>()
+
+    /** 文件没有变化时复用已经读出的文本，避免页面刷新时反复读取整份 CSV/Markdown。 */
+    private fun readText(context: Context, file: DocumentFile): String? {
+        val key = file.uri.toString()
+        if (strict.get() == true) {
+            val text = context.contentResolver.openInputStream(file.uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+                ?: error("无法读取原记录，已停止保存")
+            readVersions.get()?.putIfAbsent(key, text)
+            return text
+        }
+        val lastModified = file.lastModified()
+        val length = file.length()
+        textCache[key]?.let { cached ->
+            if (cached.lastModified == lastModified && cached.length == length) return cached.text
+        }
+        FileSnapshotCache.get(context).read(key, lastModified, length)?.let { cached ->
+            textCache[key] = TextCacheEntry(lastModified, length, cached)
+            return cached
+        }
+        val text = context.contentResolver.openInputStream(file.uri)
+            ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: error("文件读取失败")
+        textCache[key] = TextCacheEntry(lastModified, length, text)
+        FileSnapshotCache.get(context).write(key, lastModified, length, text)
+        return text
+    }
+
+    fun invalidateCaches() {
+        textCache.clear()
+    }
 
     /** 探测一下保存文件夹这个 SAF 授权是不是还有效。授权一旦失效（最常见的原因是把
      * App 整个卸载重装了一遍——持久化的文件夹授权跟着卸载一起被系统收回，不会自动
@@ -150,30 +236,28 @@ object LedgerReader {
     fun readLedger(context: Context, folderUri: String): List<LedgerRow> {
         if (folderUri.isBlank()) return emptyList()
         return try {
-            val root = DocumentFile.fromTreeUri(context, Uri.parse(folderUri)) ?: return emptyList()
-            val file = root.findFile("账本.csv") ?: return emptyList()
-            val text = context.contentResolver.openInputStream(file.uri)
-                ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: return emptyList()
+            val root = readableRoot(context, folderUri)
+            val file = StorageLayout.readFile(root, "账本.csv") ?: return emptyList()
+            val text = readText(context, file) ?: return emptyList()
             text.lineSequence()
                 .drop(1) // 第一行是表头（日期,类型,分类,金额,备注）
                 .filter { it.isNotBlank() }
                 .toList()
                 .mapIndexedNotNull { index, line -> parseCsvLine(line)?.copy(index = index) }
         } catch (e: Exception) {
-            emptyList()
+            failedRead(context, e, UiDataCache.ledger)
         }
     }
 
     fun readTodos(context: Context, folderUri: String): List<TodoItem> {
         if (folderUri.isBlank()) return emptyList()
         return try {
-            val root = DocumentFile.fromTreeUri(context, Uri.parse(folderUri)) ?: return emptyList()
-            val file = root.findFile("待办.md") ?: return emptyList()
-            val text = context.contentResolver.openInputStream(file.uri)
-                ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: return emptyList()
+            val root = readableRoot(context, folderUri)
+            val file = StorageLayout.readFile(root, "待办.md") ?: return emptyList()
+            val text = readText(context, file) ?: return emptyList()
             text.lineSequence()
                 .map { it.trimStart() }
-                .filter { it.startsWith("- [") }
+                .filter { it.startsWith("- [ ]") || it.startsWith("- [x]") || it.startsWith("- [X]") }
                 .toList()
                 .mapIndexed { index, line ->
                     val done = line.startsWith("- [x]") || line.startsWith("- [X]")
@@ -183,23 +267,51 @@ object LedgerReader {
                         .removePrefix("- [X]")
                         .trim()
                     val (domain, content) = parseDomainTag(rawContent)
-                    TodoItem(done = done, text = content, domain = domain, index = index)
+                    val metaMatch = Regex("<!--TODO_META:(\\{.*?\\})-->").find(content)
+                    val meta = metaMatch?.groupValues?.getOrNull(1)?.let {
+                        runCatching { org.json.JSONObject(it) }.getOrNull()
+                    }
+                    val visible = content
+                        .replace(Regex("\\s*<!--AI_ACTION:[A-Za-z0-9._-]+-->"), "")
+                        .replace(Regex("\\s*<!--TODO_META:\\{.*?\\}-->\\s*$"), "")
+                    TodoItem(
+                        done = done,
+                        text = visible,
+                        domain = meta?.optString("kind")?.takeIf { it.isNotBlank() } ?: domain,
+                        index = index,
+                        dueAt = meta?.optString("dueAt")?.takeIf { it.isNotBlank() && it != "null" },
+                        reminderId = meta?.optString("id")?.takeIf { it.isNotBlank() }
+                    )
                 }
                 .reversed()
         } catch (e: Exception) {
-            emptyList()
+            failedRead(context, e, UiDataCache.todos)
         }
+    }
+
+    fun readMealNotes(context: Context, folderUri: String): List<MealNote> {
+        if (folderUri.isBlank()) return emptyList()
+        return try {
+            val root = DocumentFile.fromTreeUri(context, Uri.parse(folderUri)) ?: return emptyList()
+            val file = StorageLayout.readFile(root, "饮食记录.md") ?: return emptyList()
+            val text = readText(context, file) ?: return emptyList()
+            text.lineSequence().filter { it.startsWith("- ") }.mapIndexed { index, line ->
+                val raw = line.removePrefix("- ").trim()
+                val date = raw.take(16)
+                MealNote(date, raw.drop(16).trim(), index)
+            }.toList().reversed()
+        } catch (_: Exception) { emptyList() }
     }
 
     fun readNotes(context: Context, folderUri: String): List<NoteItem> {
         if (folderUri.isBlank()) return emptyList()
         return try {
-            val root = DocumentFile.fromTreeUri(context, Uri.parse(folderUri)) ?: return emptyList()
-            val file = root.findFile("灵感.md") ?: return emptyList()
-            val text = context.contentResolver.openInputStream(file.uri)
-                ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: return emptyList()
-            // 每条灵感是一个 "## 时间\n内容" 的块，第一块是文件标题（# 灵感与笔记），跳过。
-            val blocks = text.split(Regex("(?m)^## ")).drop(1)
+            val root = readableRoot(context, folderUri)
+            val file = StorageLayout.readFile(root, "灵感.md") ?: return emptyList()
+            val text = readText(context, file) ?: return emptyList()
+            // 只有 App 写出的“## [领域]”是记录边界；正文里普通 Markdown 二级标题不能
+            // 意外拆成另一条灵感。
+            val blocks = text.split(Regex("(?m)(?=^## \\[)")).drop(1)
             blocks.mapIndexed { index, block ->
                 val lines = block.trimEnd().lines()
                 val rawHeading = lines.firstOrNull()?.trim().orEmpty()
@@ -208,17 +320,16 @@ object LedgerReader {
                 NoteItem(heading = heading, content = content, domain = domain, index = index)
             }.reversed()
         } catch (e: Exception) {
-            emptyList()
+            failedRead(context, e, UiDataCache.notes)
         }
     }
 
     fun readCards(context: Context, folderUri: String): List<CardAccount> {
         if (folderUri.isBlank()) return emptyList()
         return try {
-            val root = DocumentFile.fromTreeUri(context, Uri.parse(folderUri)) ?: return emptyList()
-            val file = root.findFile("卡片.csv") ?: return emptyList()
-            val text = context.contentResolver.openInputStream(file.uri)
-                ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: return emptyList()
+            val root = readableRoot(context, folderUri)
+            val file = StorageLayout.readFile(root, "卡片.csv") ?: return emptyList()
+            val text = readText(context, file) ?: return emptyList()
             text.lineSequence()
                 .drop(1) // 表头：卡名,类型,余额
                 .filter { it.isNotBlank() }
@@ -230,7 +341,7 @@ object LedgerReader {
                     CardAccount(name = fields[0], type = fields[1], balance = balance, index = index)
                 }
         } catch (e: Exception) {
-            emptyList()
+            failedRead(context, e, UiDataCache.cards)
         }
     }
 
@@ -238,9 +349,8 @@ object LedgerReader {
         if (folderUri.isBlank()) return emptyList()
         return try {
             val root = DocumentFile.fromTreeUri(context, Uri.parse(folderUri)) ?: return emptyList()
-            val file = root.findFile("交易记录.csv") ?: return emptyList()
-            val text = context.contentResolver.openInputStream(file.uri)
-                ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: return emptyList()
+            val file = StorageLayout.readFile(root, "交易记录.csv") ?: return emptyList()
+            val text = readText(context, file) ?: return emptyList()
             text.lineSequence()
                 .drop(1) // 表头：日期,方向,市场,代码,名称,股数,价格,金额,备注
                 .filter { it.isNotBlank() }
@@ -265,10 +375,9 @@ object LedgerReader {
     fun readHoldings(context: Context, folderUri: String): List<Holding> {
         if (folderUri.isBlank()) return emptyList()
         return try {
-            val root = DocumentFile.fromTreeUri(context, Uri.parse(folderUri)) ?: return emptyList()
-            val file = root.findFile("持仓.csv") ?: return emptyList()
-            val text = context.contentResolver.openInputStream(file.uri)
-                ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: return emptyList()
+            val root = readableRoot(context, folderUri)
+            val file = StorageLayout.readFile(root, "持仓.csv") ?: return emptyList()
+            val text = readText(context, file) ?: return emptyList()
             text.lineSequence()
                 .drop(1) // 表头：市场,代码,名称,股数,成本
                 .filter { it.isNotBlank() }
@@ -284,17 +393,16 @@ object LedgerReader {
                     )
                 }
         } catch (e: Exception) {
-            emptyList()
+            failedRead(context, e, UiDataCache.holdings)
         }
     }
 
     fun readTransfers(context: Context, folderUri: String): List<TransferRow> {
         if (folderUri.isBlank()) return emptyList()
         return try {
-            val root = DocumentFile.fromTreeUri(context, Uri.parse(folderUri)) ?: return emptyList()
-            val file = root.findFile("转账记录.csv") ?: return emptyList()
-            val text = context.contentResolver.openInputStream(file.uri)
-                ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: return emptyList()
+            val root = readableRoot(context, folderUri)
+            val file = StorageLayout.readFile(root, "转账记录.csv") ?: return emptyList()
+            val text = readText(context, file) ?: return emptyList()
             text.lineSequence()
                 .drop(1) // 表头：日期,转出账户,转入账户,金额,备注
                 .filter { it.isNotBlank() }
@@ -309,17 +417,16 @@ object LedgerReader {
                     )
                 }
         } catch (e: Exception) {
-            emptyList()
+            failedRead(context, e, UiDataCache.transfers)
         }
     }
 
     fun readWeights(context: Context, folderUri: String): List<WeightRow> {
         if (folderUri.isBlank()) return emptyList()
         return try {
-            val root = DocumentFile.fromTreeUri(context, Uri.parse(folderUri)) ?: return emptyList()
-            val file = root.findFile("体重.csv") ?: return emptyList()
-            val text = context.contentResolver.openInputStream(file.uri)
-                ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: return emptyList()
+            val root = readableRoot(context, folderUri)
+            val file = StorageLayout.readFile(root, "体重.csv") ?: return emptyList()
+            val text = readText(context, file) ?: return emptyList()
             text.lineSequence()
                 .drop(1) // 表头：日期,体重_kg,备注
                 .filter { it.isNotBlank() }
@@ -331,27 +438,68 @@ object LedgerReader {
                     WeightRow(date = fields[0], weightKg = weightKg, note = fields[2], index = index)
                 }
         } catch (e: Exception) {
-            emptyList()
+            failedRead(context, e, UiDataCache.weights)
         }
+    }
+
+    fun readDigitalHealth(context: Context, folderUri: String): List<DigitalHealthRow> {
+        if (folderUri.isBlank()) return emptyList()
+        return try {
+            val root = DocumentFile.fromTreeUri(context, Uri.parse(folderUri)) ?: return emptyList()
+            val file = StorageLayout.readFile(root, "数字健康.csv") ?: return emptyList()
+            val text = readText(context, file) ?: return emptyList()
+            text.lineSequence().drop(1).filter { it.isNotBlank() }.mapNotNull { line ->
+                val f = splitCsvLine(line); if (f.size < 4) return@mapNotNull null
+                val apps = runCatching { val a = org.json.JSONArray(f[2]); (0 until a.length()).map { i -> a.getJSONObject(i).let { o ->
+                    val name = o.optString("name")
+                    DigitalAppUsage(name, o.optInt("minutes"), o.optBoolean("feed"), o.optBoolean("growth") || isGrowthApp(name))
+                } } }.getOrDefault(emptyList())
+                f[1].toIntOrNull()?.let { DigitalHealthRow(f[0], it, apps, f[3]) }
+            }.toList()
+        } catch (e: Exception) { emptyList() }
+    }
+
+    fun readExercises(context: Context, folderUri: String): List<ExerciseRow> {
+        if (folderUri.isBlank()) return emptyList()
+        return try {
+            val root = DocumentFile.fromTreeUri(context, Uri.parse(folderUri)) ?: return emptyList()
+            val file = StorageLayout.readFile(root, "运动.csv") ?: return emptyList()
+            val text = readText(context, file) ?: return emptyList()
+            buildList<ExerciseRow> {
+                text.lineSequence().drop(1).filter { it.isNotBlank() }.forEach { line ->
+                    val f = splitCsvLine(line)
+                    if (f.size >= 7) add(ExerciseRow(f[0], f[1], f[2], f[3].toDoubleOrNull(), f[4].toDoubleOrNull(), f[5].toDoubleOrNull(), f[6].toDoubleOrNull(), f.getOrNull(7)?.toDoubleOrNull()))
+                }
+            }.sortedByDescending { it.startedAt }
+        } catch (_: Exception) { emptyList<ExerciseRow>() }
+    }
+
+    /** 不依赖某次识别的细分结果：常见学习/阅读软件即使旧记录没有 growth 字段也可归类。 */
+    private fun isGrowthApp(name: String): Boolean {
+        val value = name.lowercase(Locale.CHINA)
+        return listOf("英语", "英文", "背单词", "扇贝", "百词", "流利说", "阅读", "读书", "微信读书", "kindle", "得到", "得到app", "coursera", "udemy", "mooc", "学习通").any { value.contains(it) }
     }
 
     fun readHealthMetrics(context: Context, folderUri: String): List<HealthMetricRow> {
         if (folderUri.isBlank()) return emptyList()
         return try {
             val root = DocumentFile.fromTreeUri(context, Uri.parse(folderUri)) ?: return emptyList()
-            val file = root.findFile("健康.csv") ?: return emptyList()
-            val text = context.contentResolver.openInputStream(file.uri)
-                ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: return emptyList()
+            val file = StorageLayout.readFile(root, "健康.csv") ?: return emptyList()
+            val text = readText(context, file) ?: return emptyList()
             fun numOrNull(s: String) = s.trim().toDoubleOrNull()
             text.lineSequence()
-                // 表头：日期,恢复评分,静息心率,心率变异性HRV_ms,呼吸频率,睡眠时长_小时,
-                // 睡眠效率,压力值Strain,平均心率,最高心率,消耗千卡,备注
+                // 表头（2026-09-16 起，Mac mini 上的 whoop_sync.py 换成了更详细的版本，
+                // 在原来"压力值Strain"前面插入了 6 列睡眠细分数据，后面的列整体往后挪了
+                // 6 位——这里必须跟着改，不然从这一列开始全部对不上号）：
+                // 日期,恢复评分,静息心率,心率变异性HRV_ms,呼吸频率,睡眠时长_小时,
+                // 睡眠效率,睡眠表现,睡眠规律,浅睡_小时,深睡_小时,REM_小时,清醒_小时,
+                // 压力值Strain,平均心率,最高心率,消耗千卡,备注
                 .drop(1)
                 .filter { it.isNotBlank() }
                 .toList()
                 .mapNotNull { line ->
                     val fields = splitCsvLine(line)
-                    if (fields.size < 12) return@mapNotNull null
+                    if (fields.size < 18) return@mapNotNull null
                     HealthMetricRow(
                         date = fields[0],
                         recoveryScore = numOrNull(fields[1]),
@@ -360,11 +508,17 @@ object LedgerReader {
                         respiratoryRate = numOrNull(fields[4]),
                         sleepHours = numOrNull(fields[5]),
                         sleepEfficiency = numOrNull(fields[6]),
-                        strain = numOrNull(fields[7]),
-                        avgHeartRate = numOrNull(fields[8]),
-                        maxHeartRate = numOrNull(fields[9]),
-                        calories = numOrNull(fields[10]),
-                        note = fields[11]
+                        sleepPerformance = numOrNull(fields[7]),
+                        sleepConsistency = numOrNull(fields[8]),
+                        lightSleepHours = numOrNull(fields[9]),
+                        deepSleepHours = numOrNull(fields[10]),
+                        remSleepHours = numOrNull(fields[11]),
+                        awakeHours = numOrNull(fields[12]),
+                        strain = numOrNull(fields[13]),
+                        avgHeartRate = numOrNull(fields[14]),
+                        maxHeartRate = numOrNull(fields[15]),
+                        calories = numOrNull(fields[16]),
+                        note = fields[17]
                     )
                 }
         } catch (e: Exception) {
@@ -381,10 +535,9 @@ object LedgerReader {
         if (folderUri.isBlank()) return emptyList()
         return try {
             val root = DocumentFile.fromTreeUri(context, Uri.parse(folderUri)) ?: return emptyList()
-            val photoRoot = root.findFile("日常照片") ?: return emptyList()
             val dirName = if (category == "drink") "饮料" else "三餐"
-            val dir = photoRoot.findFile(dirName)?.takeIf { it.isDirectory } ?: return emptyList()
-            dir.listFiles()
+            photoDirectories(root, dirName)
+                .flatMap { dir -> dir.listFiles().toList() }
                 .filter { it.isFile && it.name != null }
                 .mapNotNull { f ->
                     val name = f.name ?: return@mapNotNull null
@@ -399,6 +552,8 @@ object LedgerReader {
                     } ?: f.lastModified()
                     PhotoItem(fileName = name, category = category, timestampMillis = millis, caption = caption)
                 }
+                .associateBy { it.fileName }
+                .values
                 .sortedByDescending { it.timestampMillis }
         } catch (e: Exception) {
             emptyList()
@@ -417,10 +572,8 @@ object LedgerReader {
     ): Bitmap? {
         return try {
             val root = DocumentFile.fromTreeUri(context, Uri.parse(folderUri)) ?: return null
-            val photoRoot = root.findFile("日常照片") ?: return null
             val dirName = if (category == "drink") "饮料" else "三餐"
-            val dir = photoRoot.findFile(dirName) ?: return null
-            val file = dir.findFile(fileName) ?: return null
+            val file = photoDirectories(root, dirName).firstNotNullOfOrNull { it.findFile(fileName) } ?: return null
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             context.contentResolver.openInputStream(file.uri)?.use {
                 BitmapFactory.decodeStream(it, null, bounds)
@@ -438,6 +591,15 @@ object LedgerReader {
         }
     }
 
+    /** 日常照片只使用统一中枢的“健康/日常照片”，不再并行扫描旧目录。 */
+    private fun photoDirectories(root: DocumentFile, childName: String): List<DocumentFile> {
+        // 照片是由 Syncthing 从外部写入的，绕过可能已过期的目录缓存，直接定位正式目录。
+        val rootDir = root.findFile(StorageLayout.HEALTH)?.takeIf { it.isDirectory }
+            ?.findFile("日常照片")?.takeIf { it.isDirectory }
+            ?: return emptyList()
+        return listOfNotNull(rootDir.findFile(childName)?.takeIf(DocumentFile::isDirectory))
+    }
+
     private fun parseCsvLine(line: String): LedgerRow? {
         val fields = splitCsvLine(line)
         if (fields.size < 5) return null
@@ -452,7 +614,7 @@ object LedgerReader {
         )
     }
 
-    private val DOMAIN_TAG_REGEX = Regex("^\\[(财务|健康|工作|习惯|其他)\\]\\s*(.*)$")
+    private val DOMAIN_TAG_REGEX = Regex("^\\[(财务|健康|工作|生活|习惯|其他)\\]\\s*(.*)$")
 
     /** 从待办/灵感的原始文字里解析开头的 "[域名]" 标签，返回 (域名, 去掉标签之后的文字)。
      * 解析不到（这个功能上线之前记的老数据，或者标签本身没写对）统一兜底成"其他"，

@@ -24,8 +24,7 @@ data class ClassifyResult(
     // 只有 todo/note 这两类需要模型真的判断一下。模型判不出来、给了无效值，或者压根
     // 没给，落盘时统一按"其他"兜底（见 [normalizedDomain]），不强求模型必须精确分类。
     val domain: String? = null,
-    // 待办专用：模型换算出来的具体时间点，ISO 格式 "yyyy-MM-ddTHH:mm:ss"，给同步日历用
-    // （见 CalendarSync）。模型看不出具体时间就留空，不用瞎猜。
+    // 待办专用：模型换算出来的具体时间点，ISO 格式 "yyyy-MM-ddTHH:mm:ss"，给 App 本地提醒用。
     val dueAt: String? = null,
     // 记账/收入专用：截图或文字里能看出的实际交易时间，ISO 格式 "yyyy-MM-ddTHH:mm:ss"，
     // 用来给账本.csv的「日期」列带上具体时间，让排序按真实发生时间来，而不是记录时间
@@ -45,7 +44,8 @@ data class ClassifyResult(
     val stockCode: String? = null,   // 证券代码，原样保留
     val stockName: String? = null,   // 证券名称
     val shares: Double? = null,      // 股数
-    val price: Double? = null        // 每股成交价
+    val price: Double? = null,       // 每股成交价
+    val purpose: String? = null      // 支出用途，由用户选择，与消费分类独立
 ) {
     val isExpense get() = type == "expense"
     val isIncome get() = type == "income"
@@ -55,6 +55,8 @@ data class ClassifyResult(
     val isHolding get() = type == "holding"
     val isTransfer get() = type == "transfer"
     val isWeight get() = type == "weight"
+    val isDigitalHealth get() = type == "digital_health"
+    val isMealNote get() = type == "meal_note"
     val isIgnore get() = type == "ignore"
 
     /** 落盘/展示待办、灵感的领域标签时统一走这个，不要直接用 [domain] 原始值——
@@ -74,6 +76,8 @@ data class ClassifyResult(
         "holding" -> "持仓设置"
         "transfer" -> "互转"
         "weight" -> "体重"
+        "digital_health" -> "数字健康"
+        "meal_note" -> "饮食记录"
         "ignore" -> "忽略"
         else -> type
     }
@@ -85,6 +89,7 @@ data class ClassifyResult(
             append("%.2f".format(amount ?: 0.0))
             if (!merchant.isNullOrBlank()) append(" $merchant")
             if (!category.isNullOrBlank()) append(" · $category")
+            if (isExpense && !purpose.isNullOrBlank()) append(" · $purpose")
         }
         isTodo -> buildString {
             append("[${normalizedDomain()}] ")
@@ -95,6 +100,7 @@ data class ClassifyResult(
             append("[${normalizedDomain()}] ")
             append(summary ?: "")
         }
+        isMealNote -> summary ?: "（未提取到饮食内容）"
         isTrade -> buildString {
             append(if (tradeSide == "sell") "卖出 " else "买入 ")
             append(stockName ?: stockCode ?: "未知标的")
@@ -124,6 +130,7 @@ data class ClassifyResult(
             append("体重 %.1fkg".format(amount ?: 0.0))
             if (!summary.isNullOrBlank()) append(" · $summary")
         }
+        isDigitalHealth -> "屏幕使用 ${amount?.toInt() ?: 0} 分钟" + if (!summary.isNullOrBlank()) " · $summary" else ""
         else -> summary ?: reason ?: ""
     }
 
@@ -152,6 +159,7 @@ data class ClassifyResult(
             type, fromCard.orEmpty(), toCard.orEmpty(), "%.2f".format(amount ?: 0.0)
         ).joinToString("|")
         isWeight -> listOf(type, "%.1f".format(amount ?: 0.0)).joinToString("|")
+        isDigitalHealth -> listOf(type, transactionAt.orEmpty(), "%.0f".format(amount ?: 0.0), detail.orEmpty()).joinToString("|")
         else -> null
     }
 
@@ -159,7 +167,7 @@ data class ClassifyResult(
      * 待办/灵感改的是「内容」本身；「忽略」比较特殊，编辑框里写的不是替换某个字段，
      * 而是当成一次全新的手动记录重新走一遍分类（见 [CaptureConfirmReceiver]）。 */
     fun editHint(): String = when {
-        isMoney -> "改分类，比如「代驾」"
+        isMoney -> "选择消费分类；支出可另外标记用途"
         isIgnore -> "改成需要记录的内容"
         isTodo && dueAt.isNullOrBlank() -> "改内容，记得写清楚具体时间（比如「明天8点15」），不写时间的待办不算记完"
         isTrade -> "这里只能加一句备注，股数/价格/代码这些数字不对的话，建议直接删除这条草稿重新截图或重新打字"
@@ -175,9 +183,8 @@ data class ClassifyResult(
      *
      * @param dueAt 待办专用：App 内编辑弹窗的时间选择器选出来的具体时间（ISO
      * "yyyy-MM-ddTHH:mm:ss"），非空时连带把 [whenText] 也换成人看得懂的格式，两个字段
-     * 保持一致——待办.md 那一行显示的是 whenText，日历同步用的是 dueAt，编辑时必须一起改，
-     * 不然会出现"文件里显示的时间"和"日历里提醒的时间"对不上的怪事。通知栏的文字快速
-     * 编辑（RemoteInput，没有时间选择器）不会传这个参数，走的是另一条"当成全新内容重新
+     * 保持一致——待办.md 显示 whenText，本地通知使用 dueAt，编辑时必须一起改。
+     * 编辑（通知里的行内回复，没有时间选择器）不会传这个参数，走的是另一条"当成全新内容重新
      * 分类一遍"的路径，见 [com.linkn.screenintake.capture.CaptureConfirmActions]。
      */
     fun withEdit(editedText: String, dueAt: String? = null): ClassifyResult {
@@ -210,6 +217,7 @@ data class ClassifyResult(
         o.put("stockName", stockName ?: JSONObject.NULL)
         o.put("shares", shares ?: JSONObject.NULL)
         o.put("price", price ?: JSONObject.NULL)
+        o.put("purpose", purpose ?: JSONObject.NULL)
         return o.toString()
     }
 
@@ -241,6 +249,7 @@ data class ClassifyResult(
                 amount = if (o.has("amount") && !o.isNull("amount")) o.optDouble("amount") else null,
                 merchant = str("merchant"),
                 category = str("category"),
+                purpose = str("purpose"),
                 summary = str("summary"),
                 detail = str("detail"),
                 who = str("who"),

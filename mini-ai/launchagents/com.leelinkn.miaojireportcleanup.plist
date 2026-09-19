@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.leelinkn.miaojireportcleanup</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>/Users/leelinkn/mini-ai/scripts/cleanup_reports.py</string>
+    <string>--root</string>
+    <string>/Users/leelinkn/Desktop/秒记中枢</string>
+    <string>--apply</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>3</integer>
+    <key>Minute</key><integer>20</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/Users/leelinkn/mini-ai/logs/report-cleanup.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/leelinkn/mini-ai/logs/report-cleanup.log</string>
+</dict>
+</plist>

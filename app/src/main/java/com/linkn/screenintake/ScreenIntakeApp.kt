@@ -6,6 +6,10 @@ import com.linkn.screenintake.store.PriceCache
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import com.linkn.screenintake.report.AiReportNotificationWorker
+import com.linkn.screenintake.store.SyncNotificationWorker
+import com.linkn.screenintake.store.StorageLayout
+import com.linkn.screenintake.store.LocalDataIndexWorker
 
 class ScreenIntakeApp : Application() {
     lateinit var settingsStore: SecureSettingsStore
@@ -19,7 +23,12 @@ class ScreenIntakeApp : Application() {
         super.onCreate()
         instance = this
         settingsStore = SecureSettingsStore(this)
+        StorageLayout.initialize(this)
         PriceCache.load(this)
+        AiReportNotificationWorker.schedule(this)
+        SyncNotificationWorker.schedule(this)
+        // 冷启动先让界面使用已有快照；结构化读取在后台补齐，不阻塞首屏。
+        LocalDataIndexWorker.refresh(this)
     }
 
     companion object {

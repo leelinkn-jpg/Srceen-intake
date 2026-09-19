@@ -1,5 +1,7 @@
 package com.linkn.screenintake.store
 
+import android.os.Handler
+import android.os.Looper
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 
@@ -20,8 +22,26 @@ import androidx.compose.runtime.mutableStateOf
  */
 object DataChangeSignal {
     val tick: MutableState<Int> = mutableStateOf(0)
+    private val domainTicks = listOf("财务", "健康", "工作", "成长", "系统").associateWith { mutableStateOf(0) }
+    fun forDomain(domain: String): MutableState<Int> = domainTicks.getValue(domain)
+    private val generation = java.util.concurrent.atomic.AtomicLong(0)
+    private val mainHandler = Handler(Looper.getMainLooper())
 
-    fun bump() {
-        tick.value = tick.value + 1
+    /** 给后台预热任务使用；避免它把读取中的旧快照覆盖刚保存的新界面数据。 */
+    fun currentGeneration(): Long = generation.get()
+
+    fun bump(domain: String? = null) {
+        LedgerReader.invalidateCaches()
+        generation.incrementAndGet()
+        runCatching { LocalDataIndexWorker.refresh(com.linkn.screenintake.ScreenIntakeApp.instance) }
+            .onFailure { SystemStatus.failure(com.linkn.screenintake.ScreenIntakeApp.instance, "读取", "数据已保存，后台刷新暂未启动") }
+        // 文件保存和 WorkManager 都在 I/O 线程运行。Compose 状态必须在主线程更新，
+        // 否则保存成功后可能因为状态竞争而闪退。
+        val publish: () -> Unit = {
+            tick.value = tick.value + 1
+            if (domain == null) domainTicks.values.forEach { it.value++ }
+            else domainTicks[domain]?.let { it.value++ }
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) publish() else mainHandler.post(publish)
     }
 }

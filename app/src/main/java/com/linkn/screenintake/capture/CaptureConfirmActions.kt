@@ -4,6 +4,8 @@ import android.content.Context
 import com.linkn.screenintake.ScreenIntakeApp
 import com.linkn.screenintake.classify.ClassifyResult
 import com.linkn.screenintake.store.RecordStore
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * 「确认」或者「编辑提交」之后真正落盘的那一小段逻辑，通知栏上的确认/编辑按钮
@@ -12,11 +14,12 @@ import com.linkn.screenintake.store.RecordStore
  * 结果不一样的情况。
  */
 object CaptureConfirmActions {
+    private val confirmationMutex = Mutex()
 
     /**
      * @param editedText null 表示直接按原样确认；非 null 表示编辑框/输入框里提交了新内容。
      * @param dueAt 待办专用：App 内编辑弹窗时间选择器选出来的具体时间（ISO
-     * "yyyy-MM-ddTHH:mm:ss"）。通知栏的 RemoteInput 文字快速编辑没有时间选择器，
+     * "yyyy-MM-ddTHH:mm:ss"）。通知栏行内回复的快速编辑没有时间选择器，
      * 传的永远是 null。
      *
      * 三种分支：「忽略」类型、以及「待办但一直没有具体时间、这次编辑也没在 App 里用
@@ -35,15 +38,18 @@ object CaptureConfirmActions {
         original: ClassifyResult,
         editedText: String?,
         dueAt: String? = null
-    ) {
+    ) = confirmationMutex.withLock {
         val settings = ScreenIntakeApp.instance.settingsStore
         val store = RecordStore(context)
+        // 通知与 App 共用同一把锁；连点、或两处同时确认不应重复记账。
+        if (store.readPendingDrafts(settings.folderUri).none { it.draftId == draftId }) return@withLock
         val needsReclassify = editedText != null &&
             (original.isIgnore || (original.isTodo && original.dueAt.isNullOrBlank() && dueAt == null))
         if (needsReclassify) {
             CapturePipeline(context).classifyAndRoute(editedText, skipConfirmation = true)
         } else {
             val finalResult = if (editedText != null) original.withEdit(editedText, dueAt) else original
+            require(!finalResult.isTodo || !finalResult.dueAt.isNullOrBlank()) { "请先补上具体提醒时间" }
             store.route(settings.folderUri, finalResult)
         }
         store.deletePendingDraft(settings.folderUri, draftId)

@@ -37,7 +37,9 @@ class QwenClassifier(
     // type="transfer" 而不是 expense/income。默认空列表（还没建过卡片管理），
     // 这种情况下模型只能靠文字本身的措辞判断，判不准就仍按 expense/income 处理，
     // 不强求。
-    private val cardNames: List<String> = emptyList()
+    private val cardNames: List<String> = emptyList(),
+    /** 用户在设置中维护的消费类别；用途不由模型猜，始终留给确认卡选择。 */
+    private val expenseCategories: List<String> = Categories.EXPENSE
 ) {
 
     private val client = OkHttpClient.Builder()
@@ -55,7 +57,7 @@ class QwenClassifier(
                     .put(
                         JSONObject().apply {
                             put("role", "system")
-                            put("content", buildSystemPrompt(rules, cardNames))
+                            put("content", buildSystemPrompt(rules, cardNames, expenseCategories))
                         }
                     )
                     .put(
@@ -117,7 +119,8 @@ class QwenClassifier(
                         东西」还是「喝的东西」，只回一个 JSON 对象，不要 markdown 代码块标记，
                         不要任何 JSON 以外的文字，格式：{"category":"meal 或 drink","summary":
                         "一句话描述拍的是什么，比如'牛肉面'、'一杯拿铁'、'两瓶啤酒'，不超过 15
-                        个字"}。实在看不出是吃的还是喝的（比如拍糊了、拍的根本不是食物饮料），
+                        个字","isAlcohol":true 或 false}。只要画面主要是啤酒、白酒、黄酒、红酒、
+                        鸡尾酒或其他含酒精饮品，isAlcohol=true；普通饮料为 false。实在看不出是吃的还是喝的（比如拍糊了、拍的根本不是食物饮料），
                         category 填 "meal" 兜底即可，summary 照实描述看到的东西。
                         """.trimIndent()
                     )
@@ -171,7 +174,7 @@ class QwenClassifier(
             }
             val json = JSONObject(cleaned.substring(objStart, objEnd + 1))
             val category = if (json.optString("category") == "drink") "drink" else "meal"
-            return PhotoClassification(category = category, summary = json.optStringOrNull("summary"))
+            return PhotoClassification(category = category, summary = json.optStringOrNull("summary"), isAlcohol = json.optBoolean("isAlcohol"))
         }
     }
 
@@ -201,7 +204,7 @@ class QwenClassifier(
                     .put(
                         JSONObject().apply {
                             put("role", "system")
-                            put("content", buildSystemPrompt(rules, cardNames))
+                            put("content", buildSystemPrompt(rules, cardNames, expenseCategories))
                         }
                     )
                     .put(
@@ -319,7 +322,7 @@ class QwenClassifier(
         // 视觉模型，截屏路径 [classifyScreenshot] 和长按拍照路径 [classifyMealOrDrink] 共用
         private const val VISION_MODEL = "qwen-vl-plus"
 
-        private fun buildSystemPrompt(rules: String, cardNames: List<String>): String {
+        private fun buildSystemPrompt(rules: String, cardNames: List<String>, expenseCategories: List<String>): String {
             val today = java.time.LocalDate.now()
             val todayStr = today.format(java.time.format.DateTimeFormatter.ISO_LOCAL_DATE)
             val weekday = today.dayOfWeek.getDisplayName(
@@ -345,7 +348,7 @@ class QwenClassifier(
                → type = "expense"
                {"type":"expense","amount":35.00,"merchant":"瑞幸咖啡","category":"餐饮","summary":"原始文字摘要","transactionAt":"2026-09-16T14:23:00"}
                category 只能是以下之一，不要自己发明新的分类名：
-               ${Categories.EXPENSE.joinToString("、")}
+               ${expenseCategories.joinToString("、")}
                这类内容不止出现在付款成功页面本身，银行/微信支付/支付宝推送的"交易成功""动账
                提醒"消息（不管是在聊天记录、服务通知列表还是通知栏里）只要能看到金额和交易类型，
                同样按这条规则判断成 expense，不要因为它是"提醒消息"而不是"付款页面"就归到别的
@@ -357,6 +360,8 @@ class QwenClassifier(
                这笔钱并没有真的花出去，只是在自己的账户之间挪了个地方，不要判成 expense，
                应该判成下面第 7) 类 type="transfer"。转账给别人（朋友、商家、非本人账户）
                才是真的花出去，仍然按 expense 处理。
+               银行卡/ATM“取现”“现金支取”“从卡取出现金”按用户口径属于 expense；
+               category 填“取现”，并从截图中提取扣款卡写入 card，不能判成 transfer。
 
             2) 工资到账、转账收款、退款、报销到账、理财收益到账等钱是收进来的
                → type = "income"
@@ -401,7 +406,7 @@ class QwenClassifier(
             4) 其他任何值得记下来的想法、笔记、网页内容、灵感 → type = "note"
                {"type":"note","summary":"一句话概括","detail":"更完整一点的内容，两三句话即可","domain":"其他"}
 
-               domain（第 3、4 类都适用）：这条待办/灵感归到"财务、健康、工作、习惯、其他"
+               domain：待办只填"工作"或"生活"；灵感只填"工作"或"其他"
                五个里的哪一个，App 底部按这四个领域分了 Tab，需要靠这个字段决定显示在哪儿。
                大致按内容判断：提到钱、账单、还款、报销、投资这些 → "财务"；提到身体、运动、
                饮食、睡眠、看病、体检这些 → "健康"；提到工作、客户、会议、汇报、同事、项目
@@ -478,7 +483,15 @@ class QwenClassifier(
                两点都对不上、又看不出任何"这是本人账户"的线索时，说明更可能是转给了别人，
                请按第 1)/2) 条的 expense/income 处理，不要为了凑 transfer 类型而牵强判断。
 
-            8) 体重秤/健康类 App/微信运动等界面上显示的体重读数截图（不是拍照，长按拍照
+            8) Android 系统“屏幕使用时间”或“数字健康”界面截图，出现今日总屏幕使用时长及 App
+               使用时长列表 → type = "digital_health"。amount 填总分钟数；detail 必须填 JSON 数组，
+               只保留截图中可见的 App：[{"name":"抖音","minutes":35,"feed":true}]。feed 仅在
+               抖音、TikTok、小红书、哔哩哔哩、快手、微博、Instagram、Facebook、YouTube、知乎
+               等信息流/短视频/社交内容 App 时为 true；其他 App 为 false。summary 写一句信息流概况。
+               看不清时长就不要编造。
+               {"type":"digital_health","amount":260,"detail":"[{\\"name\\":\\"抖音\\",\\"minutes\\":35,\\"feed\\":true}]","summary":"信息流使用 35 分钟","transactionAt":"2026-09-17T23:00:00"}
+
+            9) 体重秤/健康类 App/微信运动等界面上显示的体重读数截图（不是拍照，长按拍照
                那条路径不会走到这里）→ type = "weight"
                {"type":"weight","amount":68.5,"summary":"原始文字摘要","transactionAt":"2026-09-16T07:15:00"}
                字段说明：
@@ -489,7 +502,7 @@ class QwenClassifier(
                - transactionAt：规则跟前面 expense/income 一样，看得出具体时间就填，
                  看不出就留空。
 
-            9) 提取到的文字看不出是什么、或者是不值得记录的内容（游戏界面、系统菜单、无关网页等）→ type = "ignore"
+            10) 提取到的文字看不出是什么、或者是不值得记录的内容（游戏界面、系统菜单、无关网页等）→ type = "ignore"
                {"type":"ignore","reason":"一句话说明为什么忽略"}
 
             用户的分类偏好（优先参考，与上面规则冲突时以这里为准）：
@@ -506,4 +519,4 @@ class QwenClassifier(
 
 /** [QwenClassifier.classifyMealOrDrink] 的返回结果：category 是 "meal" 或 "drink"，
  * summary 是模型给的一句话描述，判断失败时可能为 null。 */
-data class PhotoClassification(val category: String, val summary: String?)
+data class PhotoClassification(val category: String, val summary: String?, val isAlcohol: Boolean = false)

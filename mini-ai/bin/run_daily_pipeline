@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""模型中立的秒记日报调度入口。
+
+它不替用户选择或调用任何云端模型。它负责把 WHOOP/定时触发转换为可追踪、可补跑的
+任务清单；配置了 MODEL_RUNNER 后再由用户选择的工具实际生成领域报告。
+"""
+import argparse
+import hashlib
+import json
+import os
+import fcntl
+import subprocess
+import time
+from datetime import datetime
+from pathlib import Path
+
+
+def write_atomic(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name("." + path.name + ".tmp")
+    temp.write_text(text, encoding="utf-8")
+    os.replace(temp, path)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def input_digest(root: Path) -> str:
+    """Only source text participates; generated reports cannot retrigger themselves."""
+    items = []
+    for domain in ("工作", "健康", "成长"):
+        for path in sorted((root / domain).rglob("*")):
+            relative = path.relative_to(root)
+            if any(part in {"AI报告", "状态", "日志", "反馈"} or part.startswith(".") for part in relative.parts):
+                continue
+            if path.is_file() and path.suffix.lower() in {".csv", ".md", ".json"}:
+                items.append((str(relative), sha256(path)))
+    return hashlib.sha256(json.dumps(items, ensure_ascii=False).encode()).hexdigest()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--trigger", required=True)
+    parser.add_argument("--date", required=True)
+    parser.add_argument("--root", default=str(Path.home() / "Desktop" / "秒记中枢"))
+    args = parser.parse_args()
+    root = Path(args.root).expanduser().resolve()
+    day = args.date
+    state = root / "系统" / "系统状态" / "分析任务" / f"{day}.json"
+    required = [root / domain / "AI规则" / "RULES.md" for domain in ("工作", "健康", "成长")]
+    missing = [str(p.relative_to(root)) for p in required if not p.is_file()]
+    if missing:
+        write_atomic(state, json.dumps({"date": day, "status": "blocked", "missing": missing,
+                                        "updatedAt": int(datetime.now().timestamp() * 1000)}, ensure_ascii=False, indent=2) + "\n")
+        raise SystemExit("日报任务未启动：缺少规则文件")
+    state.parent.mkdir(parents=True, exist_ok=True)
+    lock_file = state.with_suffix(".lock").open("a")
+    fcntl.flock(lock_file, fcntl.LOCK_EX)
+    digest = input_digest(root)
+    old = {}
+    if state.exists():
+        old = json.loads(state.read_text(encoding="utf-8"))
+        fresh_running = old.get("status") == "running" and time.time() * 1000 - old.get("startedAt", 0) < 35 * 60 * 1000
+        unchanged_complete = old.get("status") == "complete" and old.get("inputDigest") == digest
+        if fresh_running or unchanged_complete:
+            print("同一日期已有有效任务：", state)
+            return
+    domains = [{"domain": d, "rulesSha256": sha256(root / d / "AI规则" / "RULES.md")}
+               for d in ("工作", "健康", "成长")]
+    payload = {
+        "runId": f"daily-{day}", "date": day, "trigger": args.trigger,
+        "status": "queued", "createdAt": int(datetime.now().timestamp() * 1000),
+        "inputDigest": digest,
+        "revision": int(old.get("revision", 0)) + (0 if old.get("inputDigest") == digest else 1),
+        "attempt": int(old.get("attempt", 0)) + 1,
+        "domains": domains,
+        "message": "任务已就绪，等待你选定的模型执行器处理；不会修改任何原始记录。",
+    }
+    write_atomic(state, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+    runner = os.environ.get("MIAOJI_MODEL_RUNNER", "").strip()
+    if runner:
+        payload.update(status="running", startedAt=int(time.time() * 1000))
+        write_atomic(state, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+        fcntl.flock(lock_file, fcntl.LOCK_UN)
+        try:
+            subprocess.run([runner, "--job", str(state), "--root", str(root)], check=True, timeout=1800)
+            final = json.loads(state.read_text(encoding="utf-8"))
+            if final.get("status") != "complete":
+                raise RuntimeError("执行器退出但未确认报告完成")
+        except (OSError, subprocess.SubprocessError, RuntimeError) as error:
+            payload.update(status="failed", error=type(error).__name__, updatedAt=int(time.time() * 1000))
+            write_atomic(state, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+            raise SystemExit("报告任务未完成，已保留等待重试")
+        return
+    fcntl.flock(lock_file, fcntl.LOCK_UN)
+    print("日报任务已排队：", state)
+
+
+if __name__ == "__main__":
+    main()

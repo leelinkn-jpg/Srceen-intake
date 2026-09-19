@@ -65,8 +65,8 @@ fun OnboardingScreen(
                     "悬浮弹出一个全屏的拍照取景窗，拍完只用 AI 判断一下这是吃的还是喝的、配一句" +
                     "简单描述，自动归到「健康」tab 的饮食/饮料列表，不做热量成分这类更深识别，也" +
                     "不会弹通知等你确认——分错类了直接去列表里手动挪一下。三种都不会把你正在用的" +
-                    "App 切走，拍完/写完悬浮窗自己收起来，原来的界面还在原地。待办事项还会顺手" +
-                    "同步一份到手机日历，方便收到提醒。",
+                    "App 切走，拍完/写完悬浮窗自己收起来，原来的界面还在原地。待办事项由 App" +
+                    " 自己按设定时间提醒，不会写入手机或 Google 日历。",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onPrimaryContainer,
                 modifier = Modifier.padding(16.dp)
@@ -101,9 +101,8 @@ fun OnboardingScreen(
 
         StepCard(
             number = 4,
-            title = "相机、通知、日历权限",
-            description = "进入应用时会陆续弹出这几个权限申请，都同意就行——分别对应拍照、确认通知、" +
-                "待办同步日历这三个功能，拒绝也不影响最基本的读屏记录。"
+            title = "相机和通知权限",
+            description = "进入应用时会申请相机和通知权限，分别用于拍照记录、待确认通知和待办提醒。"
         )
 
         Button(onClick = onDone, modifier = Modifier.fillMaxWidth()) {

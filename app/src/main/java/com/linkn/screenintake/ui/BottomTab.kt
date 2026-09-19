@@ -2,7 +2,7 @@ package com.linkn.screenintake.ui
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalanceWallet
-import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.RocketLaunch
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Work
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -19,8 +19,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
  * 文件夹、分类偏好、一键自测、使用说明）都收在右上角齿轮按钮里，不占一个 Tab 位置。
  */
 enum class BottomTab(val label: String, val icon: ImageVector) {
-    FINANCE("财务", Icons.Default.AccountBalanceWallet),
-    HEALTH("健康", Icons.Default.Favorite),
     WORK("工作", Icons.Default.Work),
-    HABIT("习惯", Icons.Default.CheckCircle)
+    HEALTH("健康", Icons.Default.Favorite),
+    HABIT("成长", Icons.Default.RocketLaunch),
+    FINANCE("财务", Icons.Default.AccountBalanceWallet)
 }

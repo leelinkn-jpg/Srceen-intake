@@ -3,6 +3,13 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- Android 13+ 把"后台弹 Toast"跟这个权限挂钩了，不用它发真正的通知，只是要这个权限
          「已开启」这个状态，触发/识别结果的 Toast 提示才不会被系统静默吞掉 -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -10,9 +17,6 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
-    <!-- 待办事项顺带同步到系统日历，借用日历自带的提醒通知 -->
-    <uses-permission android:name="android.permission.READ_CALENDAR" />
-    <uses-permission android:name="android.permission.WRITE_CALENDAR" />
     <!-- 长按音量上/下键悬浮弹出相机小工具 / 文字输入框用，不这个权限没法用 WindowManager
          在别的 App 上面画东西；需要在系统设置里手动开一次，不是普通的运行时权限弹窗 -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
@@ -27,8 +31,16 @@
         android:theme="@style/Theme.ScreenIntake">
 
         <!-- 主界面 / 设置 -->
+        <receiver android:name=".store.TodoAlarmReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
+            </intent-filter>
+        </receiver>
         <activity
             android:name=".ui.MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
             android:exported="true"
             android:theme="@style/Theme.ScreenIntake">
             <intent-filter>
@@ -38,6 +50,11 @@
         </activity>
 
         <!-- 处理「待确认」通知上的确认/编辑动作，只接受本 App 自己发出的通知，不对外暴露 -->
+        <service
+            android:name=".meeting.MeetingRecorderService"
+            android:exported="false"
+            android:foregroundServiceType="microphone|dataSync" />
+
         <receiver
             android:name=".capture.CaptureConfirmReceiver"
             android:exported="false" />

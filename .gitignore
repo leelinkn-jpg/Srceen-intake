@@ -14,3 +14,5 @@ app/build
 _to_delete/
 Claude outputs/
 .tmp.driveupload/
+**/__pycache__/
+*.pyc

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["reportId", "domain", "periodType", "periodStart", "periodEnd", "generatedAt", "dataCutoff", "title", "summary", "severity", "sources", "missingData", "suggestedActions", "status"],
+  "properties": {
+    "reportId": {"type": "string"},
+    "domain": {"enum": ["finance", "health", "work", "growth"]},
+    "periodType": {"enum": ["daily", "weekly", "monthly"]},
+    "periodStart": {"type": "string"},
+    "periodEnd": {"type": "string"},
+    "generatedAt": {"type": "integer"},
+    "dataCutoff": {"type": "string"},
+    "title": {"type": "string"},
+    "summary": {"type": "string"},
+    "severity": {"enum": ["normal", "attention", "urgent"]},
+    "sources": {"type": "array", "items": {"type": "object", "required": ["path", "modifiedAt", "sha256"]}},
+    "missingData": {"type": "array", "items": {"type": "string"}},
+    "suggestedActions": {"type": "array", "items": {"type": "object", "required": ["id", "title", "reason", "domain"]}},
+    "status": {"enum": ["complete", "failed"]},
+    "revision": {"type": "integer", "minimum": 1}
+  }
+}

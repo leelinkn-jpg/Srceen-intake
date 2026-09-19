@@ -10,9 +10,12 @@ import android.widget.Toast
 import com.linkn.screenintake.ScreenIntakeApp
 import com.linkn.screenintake.classify.ClassifyResult
 import com.linkn.screenintake.classify.QwenClassifier
+import com.linkn.screenintake.health.HealthDataRepository
+import com.linkn.screenintake.classify.RelativeDateNormalizer
 import com.linkn.screenintake.settings.SecureSettingsStore
 import com.linkn.screenintake.store.LedgerReader
 import com.linkn.screenintake.store.RecordStore
+import com.linkn.screenintake.store.SyncNotificationWorker
 
 /**
  * 几条捕获路径的完整流程都在这里：组合键静默截屏 / 手动打字 → 发给模型判断 → 按类型
@@ -53,8 +56,8 @@ class CapturePipeline(private val context: Context) {
 
         toast("已上传云端模型，识别中…")
         try {
-            val classifier = QwenClassifier(settings.apiKey, settings.classifyRules, currentCardNames(settings))
-            val results = classifier.classify(screenText)
+            val classifier = QwenClassifier(settings.apiKey, settings.classifyRules, currentCardNames(settings), settings.expenseCategories)
+            val results = classifier.classify(screenText).map { RelativeDateNormalizer.normalize(it, screenText) }
             finishWithResults(results, screenText, settings, skipConfirmation)
         } catch (e: Exception) {
             Log.e(TAG, "分类或写入失败", e)
@@ -79,13 +82,15 @@ class CapturePipeline(private val context: Context) {
         toast("已上传云端模型，识别中…")
         var category = "meal"
         var caption: String? = null
+        var alcoholCandidate = false
         var classifyFailed = false
         var failureReason = ""
         try {
-            val classifier = QwenClassifier(settings.apiKey, settings.classifyRules, currentCardNames(settings))
+            val classifier = QwenClassifier(settings.apiKey, settings.classifyRules, currentCardNames(settings), settings.expenseCategories)
             val result = classifier.classifyMealOrDrink(base64)
             category = result.category
             caption = result.summary
+            alcoholCandidate = result.isAlcohol
         } catch (e: Exception) {
             Log.e(TAG, "拍照分类失败", e)
             classifyFailed = true
@@ -93,18 +98,15 @@ class CapturePipeline(private val context: Context) {
         }
         try {
             val fileName = RecordStore(context).savePhoto(settings.folderUri, imageBytes, category, caption)
+            if (alcoholCandidate) {
+                HealthDataRepository(context).createAlcoholCandidate(settings.folderUri, caption ?: "识别到可能饮酒", fileName)
+                SyncNotificationWorker.scanNow(context)
+            }
             if (classifyFailed) {
-                saveFailureTrace(
-                    settings,
-                    "",
-                    "捕获于 ${System.currentTimeMillis()}，长按拍照的 AI 分类失败（$failureReason），" +
-                        "照片已经按「饮食」默认存进 日常照片/三餐/$fileName，如果实际是喝的，去" +
-                        "健康 tab 的「饮食」列表里手动挪到「饮料」就行"
-                )
                 toast("拍照已保存，不过没识别出是吃的还是喝的，先归到了「饮食」")
             } else {
                 val label = if (category == "drink") "饮料" else "饮食"
-                toast("已记一张$label：${caption ?: fileName}")
+                toast(if (alcoholCandidate) "已保存照片，请确认饮酒记录" else "已记一张$label：${caption ?: fileName}")
             }
             vibrate(OK_PATTERN)
         } catch (e: Exception) {
@@ -122,8 +124,8 @@ class CapturePipeline(private val context: Context) {
         if (!ensureReady(settings)) return
         toast("已上传云端模型，识别中…")
         try {
-            val classifier = QwenClassifier(settings.apiKey, settings.classifyRules, currentCardNames(settings))
-            val results = classifier.classifyScreenshot(imageBase64)
+            val classifier = QwenClassifier(settings.apiKey, settings.classifyRules, currentCardNames(settings), settings.expenseCategories)
+            val results = classifier.classifyScreenshot(imageBase64).map { RelativeDateNormalizer.normalize(it, "") }
             finishWithResults(results, "（截屏识别，没有屏幕文字，截图没有保留）", settings, skipConfirmation = false)
         } catch (e: Exception) {
             Log.e(TAG, "截屏分类失败", e)
@@ -210,7 +212,22 @@ class CapturePipeline(private val context: Context) {
             val needsReview = fresh.filter { (it.isTodo && it.dueAt.isNullOrBlank()) || it.isTrade || it.isHolding || it.isTransfer }
             val autoRoute = fresh.filterNot { it in needsReview }
 
-            val messages = autoRoute.map { store.route(settings.folderUri, it) }.toMutableList()
+            // 手动输入这条路径专用的兜底：模型判成「忽略」意味着 route() 什么都不会存
+            // （见 RecordStore.route 的 "ignore" 分支），但这里的内容是自己一个字一个字
+            // 打出来的，不是随手截的屏——判成忽略这件事本身更可能是模型看走眼，而不是真的
+            // 不值得记；不像截屏/拍照，手动打字没有"顺手再来一次"的低成本，悄悄丢掉就是
+            // 白打了。所以这里退一步改存成灵感（用打的原文当内容），好过真的凭空消失，
+            // 判错了域大不了去灵感里删掉/挪一下——跟截屏来的「忽略」草稿不是一回事：那边
+            // 是先弹通知等你确认，你确认"没错就是该忽略"时才真的什么都不存，两种路径的
+            // 「忽略」代表的信任程度本来就不一样。
+            val messages = autoRoute.map { result ->
+                val toRoute = if (result.isIgnore) {
+                    result.copy(type = "note", summary = sourceText, reason = null)
+                } else {
+                    result
+                }
+                store.route(settings.folderUri, toRoute)
+            }.toMutableList()
             if (needsReview.isNotEmpty()) {
                 val baseId = System.currentTimeMillis()
                 needsReview.forEachIndexed { index, result ->
@@ -230,7 +247,9 @@ class CapturePipeline(private val context: Context) {
                 messages.add("${parts.joinToString("，")}，已放进「待确认」，去确认一下")
             }
             toast(messages.joinToString("\n"))
-            vibrate(if (fresh.any { it.isIgnore }) IGNORE_PATTERN else OK_PATTERN)
+            // 手动输入这条路径下已经没有真的被悄悄丢掉的内容了（忽略也改存成灵感，
+            // 见上面），统一用「成功」震动，不用再区分忽略/非忽略。
+            vibrate(OK_PATTERN)
         } else {
             // 读屏来的内容：不管判断成什么类型（包括「忽略」），一律先存草稿、弹通知等你
             // 确认或编辑，不直接落盘。多条结果就是多份草稿、多条通知，确认或划掉其中一条

@@ -1,0 +1,27 @@
+{
+  "timezone": "Asia/Shanghai",
+  "daily": {
+    "workdayCheckStart": "07:30",
+    "workdayIntervalsSeconds": [
+      {"from": "07:30", "until": "08:00", "seconds": 300},
+      {"from": "08:00", "until": "08:15", "seconds": 120},
+      {"from": "08:15", "until": "23:59", "seconds": 900}
+    ],
+    "workdayDeadline": "08:15",
+    "holidayCheckStart": "08:00",
+    "holidayIntervalSeconds": 1800,
+    "lateWhoopCreatesRevision": true,
+    "financeDaily": false
+  },
+  "weekly": {
+    "work": {
+      "day": "Sunday",
+      "checkIntervals": [{"from": "13:00", "until": "20:00", "seconds": 1800}],
+      "requiredMaterials": ["周经营数据", "渠道营销建议"],
+      "behaviorWhenMissing": "wait_and_mark_missing"
+    },
+    "otherDomains": "Sunday 22:00",
+    "overall": "Sunday 22:15"
+  },
+  "monthly": {"domains": "last day 22:00", "overall": "last day 22:15"}
+}

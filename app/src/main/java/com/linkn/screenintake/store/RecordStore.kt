@@ -2,31 +2,112 @@ package com.linkn.screenintake.store
 
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import com.linkn.screenintake.classify.ClassifyResult
+import com.linkn.screenintake.classify.ExpensePurpose
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
+import org.json.JSONObject
 
 /**
  * 把分类结果落盘到用户在设置里选定的那个文件夹（SAF tree），同一个文件夹建议就是
  * Syncthing / 坚果云之类会同步到电脑的目录。主要文件：
- *   账本.csv   —— 支出和收入两种，和 Mac 端脚本读的格式一致（日期,类型,分类,金额,备注），
+ *   财务/账本.csv —— 支出和收入两种，和 Mac 端脚本读的格式一致（日期,类型,分类,金额,备注），
  *                「类型」这一列是"支出"或"收入"
- *   待办.md    —— 待办事项，Markdown 复选框列表
- *   灵感.md    —— 秒记的想法/笔记
- *   体重.csv   —— 体重截图识别出来的读数，日期,体重_kg,备注
- *   日常照片/三餐/、日常照片/饮料/  —— 长按拍照存下来的原始照片，AI 只做"吃的还是
+ *   工作/待办.md —— 待办事项，Markdown 复选框列表
+ *   工作/灵感.md —— 秒记的想法/笔记
+ *   健康/体重.csv —— 体重截图识别出来的读数，日期,体重_kg,备注
+ *   健康/日常照片/三餐/、健康/日常照片/饮料/ —— 长按拍照存下来的原始照片，AI 只做"吃的还是
  *                喝的+一句话描述"这种轻量分类用来自动分文件夹，不做热量/成分这类
  *                更深的分析，那些留给以后同步给 Mac 之后更强的模型去看
- * 分类失败或看不懂的，连提取到的原始文字一起丢进「待确认」子文件夹，不静默丢弃。
- * 待办事项另外会顺手调用 [CalendarSync] 同步一份到系统日历，方便收到原生提醒通知——
- * 待办.md 才是主记录，日历那份只是附带的、能提醒你的副本。
+ * 分类失败或看不懂的，连提取到的原始文字一起丢进「系统/待确认」，不静默丢弃。
+ * 待办事项由 App 自己安排本地通知，不再写入系统或 Google 日历。
  */
 class RecordStore(private val context: Context) {
 
     private val timeFmt = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.CHINA)
     private val stampFmt = SimpleDateFormat("yyyy-MM-dd_HHmmss", Locale.CHINA)
+
+    /** 所有写入同一个同步目录的操作必须串行：SAF 文件并不提供数据库事务。 */
+    private fun <T> serializedWrite(block: () -> T): T = writeLock.withLock {
+        LedgerReader.withStrictReads { VerifiedFileWrite.transaction(context, block) }
+    }
+    fun reconcilePendingWrites(): String = writeLock.withLock { VerifiedFileWrite.reconcile(context) }
+
+    // Match the exact record the user opened, never blindly reuse its old row number.
+    private fun <T> uniqueRecord(rows: List<T>, matches: (T) -> Boolean): T =
+        selectUnchangedRecord(rows, matches)
+
+    fun updateLedgerRow(folder: String, original: LedgerRow, updated: LedgerRow) = serializedWrite {
+        val current = uniqueRecord(LedgerReader.readLedger(context, folder)) { it.copy(index = original.index) == original }
+        updateLedgerRow(folder, current.index, updated)
+    }
+
+    fun deleteLedgerRow(folder: String, original: LedgerRow) = serializedWrite {
+        val current = uniqueRecord(LedgerReader.readLedger(context, folder)) { it.copy(index = original.index) == original }
+        deleteLedgerRow(folder, current.index)
+    }
+
+    fun updateTodo(folder: String, original: TodoItem, done: Boolean, text: String, domain: String, dueAt: String?) = serializedWrite {
+        val current = uniqueRecord(LedgerReader.readTodos(context, folder)) { it.copy(index = original.index) == original }
+        updateTodo(folder, current.index, done, text, domain, dueAt, current.reminderId)
+    }
+
+    fun deleteTodo(folder: String, original: TodoItem) = serializedWrite {
+        val current = uniqueRecord(LedgerReader.readTodos(context, folder)) { it.copy(index = original.index) == original }
+        deleteTodo(folder, current.index)
+    }
+
+    fun updateNote(folder: String, original: NoteItem, content: String, domain: String) = serializedWrite {
+        val current = uniqueRecord(LedgerReader.readNotes(context, folder)) { it.copy(index = original.index) == original }
+        updateNote(folder, current.index, content, domain)
+    }
+
+    fun deleteNote(folder: String, original: NoteItem) = serializedWrite {
+        val current = uniqueRecord(LedgerReader.readNotes(context, folder)) { it.copy(index = original.index) == original }
+        deleteNote(folder, current.index)
+    }
+
+    fun updateCard(folder: String, original: CardAccount, updated: CardAccount) = serializedWrite {
+        val current = uniqueRecord(LedgerReader.readCards(context, folder)) { it.copy(index = original.index) == original }
+        updateCard(folder, current.index, updated)
+    }
+    fun deleteCard(folder: String, original: CardAccount) = serializedWrite {
+        val current = uniqueRecord(LedgerReader.readCards(context, folder)) { it.copy(index = original.index) == original }
+        deleteCard(folder, current.index)
+    }
+    fun updateHolding(folder: String, original: Holding, updated: Holding) = serializedWrite {
+        val current = uniqueRecord(LedgerReader.readHoldings(context, folder)) { it.copy(index = original.index) == original }
+        updateHolding(folder, current.index, updated)
+    }
+    fun deleteHolding(folder: String, original: Holding) = serializedWrite {
+        val current = uniqueRecord(LedgerReader.readHoldings(context, folder)) { it.copy(index = original.index) == original }
+        deleteHolding(folder, current.index)
+    }
+    fun updateWeight(folder: String, original: WeightRow, updated: WeightRow) = serializedWrite {
+        val current = uniqueRecord(LedgerReader.readWeights(context, folder)) { it.copy(index = original.index) == original }
+        updateWeight(folder, current.index, updated)
+    }
+    fun deleteWeight(folder: String, original: WeightRow) = serializedWrite {
+        val current = uniqueRecord(LedgerReader.readWeights(context, folder)) { it.copy(index = original.index) == original }
+        deleteWeight(folder, current.index)
+    }
+
+    private fun validate(result: ClassifyResult) {
+        val finiteAmount = result.amount?.takeIf { it.isFinite() }
+        if (result.type in setOf("expense", "income", "transfer", "trade", "weight") &&
+            (finiteAmount == null || finiteAmount < 0.0)) {
+            throw IllegalArgumentException("金额或数值无效，请调整后再保存")
+        }
+        if (listOf(result.summary, result.detail, result.merchant).any { it?.length ?: 0 > 4_000 }) {
+            throw IllegalArgumentException("识别内容过长，请调整后再保存")
+        }
+    }
 
     private fun root(folderUri: String): DocumentFile {
         val uri = Uri.parse(folderUri)
@@ -55,9 +136,10 @@ class RecordStore(private val context: Context) {
         return timeFmt.format(now)
     }
 
-    fun route(folderUri: String, result: ClassifyResult): String {
+    fun route(folderUri: String, result: ClassifyResult): String = serializedWrite {
+        validate(result)
         val now = Date()
-        return when (result.type) {
+        when (result.type) {
             "expense", "income" -> {
                 val isIncome = result.type == "income"
                 val amount = result.amount ?: 0.0
@@ -71,14 +153,19 @@ class RecordStore(private val context: Context) {
                     }
                 }
                 val typeCn = if (isIncome) "收入" else "支出"
-                appendCsvRow(folderUri, resolveLedgerDate(result, now), typeCn, category, amount, note)
+                val taggedNote = ExpensePurpose.withNote(note, if (result.isExpense) result.purpose else null, result.card)
+                appendCsvRow(folderUri, resolveLedgerDate(result, now), typeCn, category, amount, taggedNote)
                 applyCardDelta(folderUri, result.card, isIncome, amount)
                 "已记$typeCn：¥%.2f %s".format(amount, category)
             }
             "todo" -> {
+                val todoId = "todo_${UUID.randomUUID()}"
+                val todoKind = if (result.domain == "其他" || result.domain == "生活") "其他" else "工作"
+                val meta = JSONObject().put("id", todoId).put("kind", todoKind)
+                    .put("dueAt", result.dueAt ?: JSONObject.NULL).toString()
                 val line = buildString {
                     append("- [ ] ")
-                    append("[${result.normalizedDomain()}] ")
+                    append("[$todoKind] ")
                     append(timeFmt.format(now))
                     append("  ")
                     append(result.summary ?: "（未提取到内容）")
@@ -88,26 +175,33 @@ class RecordStore(private val context: Context) {
                         result.source?.let { "来源：$it" }
                     )
                     if (extra.isNotEmpty()) append("（${extra.joinToString("，")}）")
+                    append(" <!--TODO_META:$meta-->")
                 }
                 appendText(folderUri, "待办.md", "text/markdown", "# 待办\n", line)
-                CalendarSync.trySync(context, result)
+                TodoReminderWorker.schedule(context, todoId, result.summary.orEmpty(), result.dueAt)
                 "已记待办：${result.summary ?: ""}"
             }
             "note" -> {
+                val noteDomain = if (result.domain == "工作") "工作" else "其他"
                 val block = buildString {
                     append("## ")
-                    append("[${result.normalizedDomain()}] ")
+                    append("[$noteDomain] ")
                     append(timeFmt.format(now))
                     append("\n")
-                    append(result.summary ?: "")
+                    append((result.summary ?: "").replace(Regex("(?m)^## "), "### "))
                     if (!result.detail.isNullOrBlank()) {
                         append("\n\n")
-                        append(result.detail)
+                        append(result.detail.replace(Regex("(?m)^## "), "### "))
                     }
                     append("\n")
                 }
                 appendText(folderUri, "灵感.md", "text/markdown", "# 灵感与笔记\n", block)
                 "已记灵感：${result.summary ?: ""}"
+            }
+            "meal_note" -> {
+                val line = "- ${timeFmt.format(now)}  ${result.summary ?: "（未提取到内容）"}"
+                appendText(folderUri, "饮食记录.md", "text/markdown", "# 饮食记录\n", line)
+                "已记饮食：${result.summary ?: ""}"
             }
             "trade" -> {
                 val isSell = result.tradeSide == "sell"
@@ -167,11 +261,35 @@ class RecordStore(private val context: Context) {
                 appendWeightRow(folderUri, dateStr, weightKg, result.summary.orEmpty())
                 "已记体重：%.1fkg".format(weightKg)
             }
+            "digital_health" -> {
+                val minutes = result.amount?.toInt()?.coerceAtLeast(0) ?: 0
+                appendDigitalHealthRow(folderUri, resolveLedgerDate(result, now), minutes, result.detail.orEmpty(), result.summary.orEmpty())
+                "已记数字健康：${minutes}分钟"
+            }
             "ignore" -> {
                 "已忽略：${result.reason ?: "判断为无需记录的内容"}"
             }
             else -> throw IllegalStateException("未知类型：${result.type}")
         }
+    }
+
+    /** 报告建议经用户确认后写入待办；隐藏动作编号用于崩溃重试时防止重复追加。 */
+    fun addReportTodo(folderUri: String, actionId: String, title: String, reason: String, domain: String, dueAt: String?) = serializedWrite {
+        val safeId = actionId.replace(Regex("[^A-Za-z0-9._-]"), "_").take(100)
+        require(safeId.isNotBlank()) { "建议动作缺少编号" }
+        val marker = "<!--AI_ACTION:$safeId-->"
+        val r = root(folderUri)
+        val existingFile = StorageLayout.readFile(r, "待办.md")
+        val existing = existingFile?.let { file -> context.contentResolver.openInputStream(file.uri)
+            ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } }.orEmpty()
+        if (existing.contains(marker)) return@serializedWrite
+        val safeDomain = if (domain == "其他" || domain == "生活") "其他" else "工作"
+        val reminderId = "report_$safeId"
+        val meta = JSONObject().put("id", reminderId).put("kind", safeDomain)
+            .put("dueAt", dueAt ?: JSONObject.NULL).put("actionId", safeId).toString()
+        val line = "- [ ] [$safeDomain] ${timeFmt.format(Date())}  ${title.trim()} $marker <!--TODO_META:$meta-->"
+        appendText(folderUri, "待办.md", "text/markdown", "# 待办\n", line)
+        TodoReminderWorker.schedule(context, reminderId, title.trim(), dueAt)
     }
 
     // ------------------------------------------------------------------
@@ -190,7 +308,7 @@ class RecordStore(private val context: Context) {
     }
 
     /** 卡片管理页新增一张卡：追加到列表末尾整篇重写。 */
-    fun addCard(folderUri: String, card: CardAccount) {
+    fun addCard(folderUri: String, card: CardAccount) = serializedWrite {
         val cards = LedgerReader.readCards(context, folderUri).toMutableList()
         cards.add(card.copy(index = cards.size))
         saveCards(folderUri, cards)
@@ -224,7 +342,7 @@ class RecordStore(private val context: Context) {
     private fun applyCardDelta(folderUri: String, cardHint: String?, isIncome: Boolean, amount: Double) {
         if (cardHint.isNullOrBlank()) return
         val cards = LedgerReader.readCards(context, folderUri)
-        val idx = cards.indexOfFirst { cardHint.contains(it.name) || it.name.contains(cardHint) }
+        val idx = findCardIndex(cards, cardHint)
         if (idx < 0) return
         val card = cards[idx]
         val updated = cards.toMutableList()
@@ -252,10 +370,7 @@ class RecordStore(private val context: Context) {
     private fun applyTransfer(folderUri: String, fromHint: String?, toHint: String?, amount: Double) {
         if (fromHint.isNullOrBlank() && toHint.isNullOrBlank()) return
         val cards = LedgerReader.readCards(context, folderUri).toMutableList()
-        fun findIdx(hint: String?): Int {
-            if (hint.isNullOrBlank()) return -1
-            return cards.indexOfFirst { hint.contains(it.name) || it.name.contains(hint) }
-        }
+        fun findIdx(hint: String?) = findCardIndex(cards, hint)
         val fromIdx = findIdx(fromHint)
         val toIdx = findIdx(toHint)
         if (fromIdx < 0 && toIdx < 0) return
@@ -268,6 +383,18 @@ class RecordStore(private val context: Context) {
             cards[toIdx] = c.copy(balance = c.balance + cardDelta(c.type, isIncome = true, amount = amount))
         }
         saveCards(folderUri, cards)
+    }
+
+    /** 银行通知的卡名常带“储蓄卡(1234)”等不同格式；优先名称，再用尾号匹配。 */
+    private fun findCardIndex(cards: List<CardAccount>, hint: String?): Int {
+        if (hint.isNullOrBlank()) return -1
+        val normalizedHint = hint.lowercase().filter { it.isLetterOrDigit() }
+        cards.indexOfFirst { card ->
+            val normalized = card.name.lowercase().filter { it.isLetterOrDigit() }
+            normalizedHint.contains(normalized) || normalized.contains(normalizedHint)
+        }.takeIf { it >= 0 }?.let { return it }
+        val tail = Regex("\\d{4}").findAll(hint).lastOrNull()?.value ?: return -1
+        return cards.indexOfFirst { Regex("\\d{4}").findAll(it.name).lastOrNull()?.value == tail }
     }
 
     /** 卡片页"转账"按钮专用：用户在表单里自己选好了转出/转入卡、填好金额，直接执行——
@@ -318,6 +445,34 @@ class RecordStore(private val context: Context) {
         )
     }
 
+    /** 健康页编辑/删除体重时按原始行号安全重写；只影响这一条体重记录。 */
+    fun updateWeight(folderUri: String, index: Int, updated: WeightRow) {
+        val rows = LedgerReader.readWeights(context, folderUri).toMutableList()
+        if (index !in rows.indices) return
+        rows[index] = updated
+        writeWeightRows(folderUri, rows)
+    }
+
+    fun deleteWeight(folderUri: String, index: Int) {
+        val rows = LedgerReader.readWeights(context, folderUri).toMutableList()
+        if (index !in rows.indices) return
+        rows.removeAt(index)
+        writeWeightRows(folderUri, rows)
+    }
+
+    private fun writeWeightRows(folderUri: String, rows: List<WeightRow>) {
+        fun esc(s: String) = "\"" + s.replace("\"", "\"\"") + "\""
+        val header = "$BOM" + listOf("日期", "体重_kg", "备注").joinToString(",")
+        val body = rows.joinToString("\n") { row -> listOf(esc(row.date), row.weightKg.toString(), esc(row.note)).joinToString(",") }
+        writeWholeFile(folderUri, "体重.csv", "text/csv", if (body.isBlank()) "$header\n" else "$header\n$body\n")
+    }
+
+    private fun appendDigitalHealthRow(folderUri: String, date: String, totalMinutes: Int, appsJson: String, note: String) {
+        fun esc(s: String) = "\"" + s.replace("\"", "\"\"") + "\""
+        appendText(folderUri, "数字健康.csv", "text/csv", "$BOM" + "日期,总分钟,App明细_JSON,摘要",
+            listOf(esc(date), totalMinutes.toString(), esc(appsJson), esc(note)).joinToString(","))
+    }
+
     /**
      * 长按拍照存下来的原始照片——三餐、饮料这类日常照片。AI 只负责判断"这是吃的还是
      * 喝的"外加一句极简描述（比如"牛肉面"），不做热量/成分这类更深的分析，那些留给
@@ -331,9 +486,7 @@ class RecordStore(private val context: Context) {
     fun savePhoto(folderUri: String, imageBytes: ByteArray, category: String, caption: String?): String {
         val dirName = if (category == "drink") PHOTO_DRINK_DIR else PHOTO_MEAL_DIR
         val r = root(folderUri)
-        val photoRoot = r.findFile(PHOTO_ROOT_DIR)?.takeIf { it.isDirectory }
-            ?: r.createDirectory(PHOTO_ROOT_DIR)
-            ?: throw IllegalStateException("创建\"$PHOTO_ROOT_DIR\"文件夹失败")
+        val photoRoot = StorageLayout.writableDirectory(context, r, StorageLayout.HEALTH, PHOTO_ROOT_DIR)
         val dir = photoRoot.findFile(dirName)?.takeIf { it.isDirectory }
             ?: photoRoot.createDirectory(dirName)
             ?: throw IllegalStateException("创建\"$dirName\"文件夹失败")
@@ -358,7 +511,7 @@ class RecordStore(private val context: Context) {
     fun movePhoto(folderUri: String, fileName: String, fromCategory: String, toCategory: String): Boolean {
         if (fromCategory == toCategory) return true
         val r = root(folderUri)
-        val photoRoot = r.findFile(PHOTO_ROOT_DIR) ?: return false
+        val photoRoot = StorageLayout.readDirectory(r, StorageLayout.HEALTH, PHOTO_ROOT_DIR) ?: return false
         val fromDirName = if (fromCategory == "drink") PHOTO_DRINK_DIR else PHOTO_MEAL_DIR
         val toDirName = if (toCategory == "drink") PHOTO_DRINK_DIR else PHOTO_MEAL_DIR
         val fromDir = photoRoot.findFile(fromDirName) ?: return false
@@ -375,7 +528,7 @@ class RecordStore(private val context: Context) {
     /** 健康 tab 的 饮食/饮料 列表里删掉一张拍糊了/拍错了的照片用。 */
     fun deletePhoto(folderUri: String, fileName: String, category: String): Boolean {
         val r = root(folderUri)
-        val photoRoot = r.findFile(PHOTO_ROOT_DIR) ?: return false
+        val photoRoot = StorageLayout.readDirectory(r, StorageLayout.HEALTH, PHOTO_ROOT_DIR) ?: return false
         val dirName = if (category == "drink") PHOTO_DRINK_DIR else PHOTO_MEAL_DIR
         val dir = photoRoot.findFile(dirName) ?: return false
         val file = dir.findFile(fileName) ?: return false
@@ -501,8 +654,7 @@ class RecordStore(private val context: Context) {
      */
     fun savePendingDraft(folderUri: String, draftId: String, result: ClassifyResult, screenText: String) {
         val r = root(folderUri)
-        val dir = r.findFile(UNCONFIRMED_DIR) ?: r.createDirectory(UNCONFIRMED_DIR)
-            ?: throw IllegalStateException("无法创建「$UNCONFIRMED_DIR」目录")
+        val dir = StorageLayout.writableDirectory(context, r, StorageLayout.SYSTEM, UNCONFIRMED_DIR)
         val name = draftFileName(draftId)
         val file = dir.findFile(name) ?: dir.createFile("text/plain", name)
         if (file != null) {
@@ -522,7 +674,7 @@ class RecordStore(private val context: Context) {
     /** 确认或编辑完成后，把对应的草稿文件清掉，不管走的是哪个分支都不该再留着。 */
     fun deletePendingDraft(folderUri: String, draftId: String) {
         val r = root(folderUri)
-        val dir = r.findFile(UNCONFIRMED_DIR) ?: return
+        val dir = StorageLayout.readDirectory(r, StorageLayout.SYSTEM, UNCONFIRMED_DIR) ?: return
         dir.findFile(draftFileName(draftId))?.delete()
         DataChangeSignal.bump()
     }
@@ -537,7 +689,7 @@ class RecordStore(private val context: Context) {
      */
     fun readPendingDrafts(folderUri: String): List<PendingDraft> {
         val r = root(folderUri)
-        val dir = r.findFile(UNCONFIRMED_DIR) ?: return emptyList()
+        val dir = StorageLayout.readDirectory(r, StorageLayout.SYSTEM, UNCONFIRMED_DIR) ?: return emptyList()
         return dir.listFiles()
             .filter { it.name?.startsWith(DRAFT_PREFIX) == true && it.name?.endsWith(".txt") == true }
             .mapNotNull { file ->
@@ -576,7 +728,7 @@ class RecordStore(private val context: Context) {
      */
     fun readUnconfirmedNotes(folderUri: String): List<UnconfirmedNote> {
         val r = root(folderUri)
-        val dir = r.findFile(UNCONFIRMED_DIR) ?: return emptyList()
+        val dir = StorageLayout.readDirectory(r, StorageLayout.SYSTEM, UNCONFIRMED_DIR) ?: return emptyList()
         return dir.listFiles()
             .filter { it.name?.startsWith(DRAFT_PREFIX) != true && it.name?.endsWith(".txt") == true }
             .mapNotNull { file ->
@@ -591,7 +743,7 @@ class RecordStore(private val context: Context) {
     /** 排查记录本身没法「确认」，只能看完之后手动清掉。 */
     fun deleteUnconfirmedNote(folderUri: String, fileName: String) {
         val r = root(folderUri)
-        val dir = r.findFile(UNCONFIRMED_DIR) ?: return
+        val dir = StorageLayout.readDirectory(r, StorageLayout.SYSTEM, UNCONFIRMED_DIR) ?: return
         dir.findFile(fileName)?.delete()
         DataChangeSignal.bump()
     }
@@ -599,8 +751,7 @@ class RecordStore(private val context: Context) {
     /** 分类失败 / 网络错误 / 解析失败时兜底：把提取到的原始文字连同失败原因存下来，人工看。 */
     fun saveUnconfirmed(folderUri: String, originalText: String, reason: String) {
         val r = root(folderUri)
-        val dir = r.findFile(UNCONFIRMED_DIR) ?: r.createDirectory(UNCONFIRMED_DIR)
-            ?: throw IllegalStateException("无法创建「$UNCONFIRMED_DIR」目录")
+        val dir = StorageLayout.writableDirectory(context, r, StorageLayout.SYSTEM, UNCONFIRMED_DIR)
         val stamp = stampFmt.format(Date())
         val note = dir.createFile("text/plain", "$stamp.txt")
         if (note != null) {
@@ -616,15 +767,54 @@ class RecordStore(private val context: Context) {
     fun updateLedgerRow(folderUri: String, index: Int, updated: LedgerRow) {
         val rows = LedgerReader.readLedger(context, folderUri).toMutableList()
         if (index !in rows.indices) return
+        val original = rows[index]
         rows[index] = updated
         writeLedgerRows(folderUri, rows)
+        try {
+            syncCardsForLedgerChange(folderUri, original, updated)
+        } catch (e: Exception) {
+            // 卡片余额没能同步时恢复原流水，避免界面显示修改成功但两份数据已经不一致。
+            rows[index] = original
+            runCatching { writeLedgerRows(folderUri, rows) }
+            throw e
+        }
     }
 
     fun deleteLedgerRow(folderUri: String, index: Int) {
         val rows = LedgerReader.readLedger(context, folderUri).toMutableList()
         if (index !in rows.indices) return
-        rows.removeAt(index)
+        val original = rows.removeAt(index)
         writeLedgerRows(folderUri, rows)
+        try {
+            syncCardsForLedgerChange(folderUri, original, null)
+        } catch (e: Exception) {
+            // 删除流水和反向冲销必须一起成功；余额写入失败时尽量恢复原流水。
+            rows.add(index, original)
+            runCatching { writeLedgerRows(folderUri, rows) }
+            throw e
+        }
+    }
+
+    /**
+     * 把账本行的变化同步到卡片当前余额：旧行乘 -1 撤销，新行乘 +1 应用。
+     * 只有备注中明确带【账户：…】且能匹配现有卡片时才调整，绝不根据分类或商户猜账户。
+     */
+    private fun syncCardsForLedgerChange(folderUri: String, old: LedgerRow?, new: LedgerRow?) {
+        val cards = LedgerReader.readCards(context, folderUri).toMutableList()
+        if (cards.isEmpty()) return
+        var changed = false
+        fun apply(row: LedgerRow, direction: Double) {
+            val cardName = ExpensePurpose.cardFromNote(row.note) ?: return
+            val index = findCardIndex(cards, cardName)
+            if (index < 0) return
+            val card = cards[index]
+            val isIncome = row.type == "收入"
+            cards[index] = card.copy(balance = card.balance + direction * cardDelta(card.type, isIncome, row.amount))
+            changed = true
+        }
+        old?.let { apply(it, -1.0) }
+        new?.let { apply(it, 1.0) }
+        if (changed) saveCards(folderUri, cards)
     }
 
     private fun writeLedgerRows(folderUri: String, rows: List<LedgerRow>) {
@@ -641,45 +831,67 @@ class RecordStore(private val context: Context) {
     /** 待办列表勾选/编辑内容：只重写第 index 条"- [ ]"/"- [x]"行，其余行（包括 # 待办 标题）原样保留。
      * domain 传的是（可能被用户改过的）新领域标签，重写这一行的时候要把 "[域名]" 标签一起拼回去，
      * 不然这一行就会退化成没有标签的老格式，下次读回来又会被兜底成"其他"。 */
-    fun updateTodo(folderUri: String, index: Int, done: Boolean, text: String, domain: String) {
-        val safeDomain = domain.takeIf { it in ClassifyResult.DOMAINS } ?: "其他"
+    fun updateTodo(folderUri: String, index: Int, done: Boolean, text: String, domain: String, dueAt: String?, reminderId: String?) {
+        val safeDomain = if (domain == "其他" || domain == "生活") "其他" else "工作"
+        val safeId = reminderId ?: "todo_${UUID.randomUUID()}"
+        val meta = JSONObject().put("id", safeId).put("kind", safeDomain)
+            .put("dueAt", dueAt ?: JSONObject.NULL).toString()
         rewriteRawLines(folderUri, "待办.md") { lines ->
             var seen = -1
             lines.map { line ->
-                if (line.startsWith("- [ ]") || line.startsWith("- [x]")) {
+                val trimmed = line.trimStart()
+                if (trimmed.startsWith("- [ ]") || trimmed.startsWith("- [x]") || trimmed.startsWith("- [X]")) {
                     seen++
                     if (seen == index) {
-                        val box = if (done) "- [x] " else "- [ ] "
+                        val box = line.takeWhile { it.isWhitespace() } + if (done) "- [x] " else "- [ ] "
+                        // 编辑文字不能抹掉 AI_ACTION；它是报告建议去重的唯一身份。
+                        val action = Regex("<!--AI_ACTION:[A-Za-z0-9._-]+-->").find(line)?.value.orEmpty()
                         box + "[$safeDomain] " + text
+                            .replace(Regex("\\s*<!--AI_ACTION:[A-Za-z0-9._-]+-->\\s*"), "")
+                            .replace(Regex("\\s*<!--TODO_META:.*-->\\s*$"), "") +
+                            " ${action.takeIf { it.isNotBlank() } ?: ""} <!--TODO_META:$meta-->"
                     } else line
                 } else line
             }
         }
+        // 待办文件已经安全落盘后，提醒只是附加能力。WorkManager 处于重启、升级或系统
+        // 限制状态时可能拒绝本次调度，绝不能因此把已经成功的“完成待办”误报成失败。
+        runCatching {
+            if (done) TodoReminderWorker.cancel(context, safeId)
+            else TodoReminderWorker.schedule(context, safeId, text, dueAt)
+        }.onFailure { Log.w(TAG, "待办已写入，但本地提醒更新失败：$safeId", it) }
     }
 
     fun deleteTodo(folderUri: String, index: Int) {
+        val old = LedgerReader.readTodos(context, folderUri).firstOrNull { it.index == index }
         rewriteRawLines(folderUri, "待办.md") { lines ->
             var seen = -1
             lines.filterNot { line ->
-                val isTodoLine = line.startsWith("- [ ]") || line.startsWith("- [x]")
+                val trimmed = line.trimStart()
+                val isTodoLine = trimmed.startsWith("- [ ]") || trimmed.startsWith("- [x]") || trimmed.startsWith("- [X]")
                 if (isTodoLine) seen++
                 isTodoLine && seen == index
             }
         }
+        old?.reminderId?.let { id ->
+            // 删除记录已完成后，取消通知失败不应让用户看到“删除失败”。
+            runCatching { TodoReminderWorker.cancel(context, id) }
+                .onFailure { Log.w(TAG, "待办已删除，但本地提醒取消失败：$id", it) }
+        }
     }
 
-    private fun rewriteRawLines(folderUri: String, fileName: String, transform: (List<String>) -> List<String>) {
+    private fun rewriteRawLines(folderUri: String, fileName: String, transform: (List<String>) -> List<String>) = writeLock.withLock {
         val r = root(folderUri)
-        val file = r.findFile(fileName) ?: return
+        val source = StorageLayout.readFile(r, fileName) ?: error("找不到 $fileName，请刷新后重试")
+        val file = StorageLayout.writableFile(context, r, fileName, source.type ?: "text/plain")
         val existing = context.contentResolver.openInputStream(file.uri)
-            ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+            ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+            ?: throw IllegalStateException("无法读取已有的 $fileName，已停止写入以保护原始数据")
         val lines = existing.split("\n")
         val newLines = transform(lines)
         val content = newLines.joinToString("\n")
-        context.contentResolver.openOutputStream(file.uri, "wt")?.use {
-            it.write(content.toByteArray(Charsets.UTF_8))
-        }
-        DataChangeSignal.bump()
+        VerifiedFileWrite.replace(context, file, existing, content)
+        DataChangeSignal.bump(StorageLayout.domainForFile(fileName))
     }
 
     /** 灵感编辑/删除：按 [LedgerReader.readNotes] 同一套 "## " 分块逻辑重新切一遍，保证读写对块的理解一致。
@@ -701,11 +913,13 @@ class RecordStore(private val context: Context) {
         }
     }
 
-    private fun rewriteNoteBlocks(folderUri: String, transform: (List<NoteItem>) -> List<NoteItem>) {
+    private fun rewriteNoteBlocks(folderUri: String, transform: (List<NoteItem>) -> List<NoteItem>) = writeLock.withLock {
         val fileName = "灵感.md"
-        val existing = LedgerReader.readNotes(context, folderUri)
-        val newBlocks = transform(existing)
-        val body = newBlocks.joinToString("") { block ->
+        // readNotes 用倒序供界面展示；写文件前必须恢复原始顺序，不能把展示位置当成身份。
+        val displayed = LedgerReader.readNotes(context, folderUri)
+        val sourceOrder = displayed.sortedBy { it.index }
+        val newBlocks = transform(sourceOrder)
+        val body = newBlocks.sortedBy { it.index }.joinToString("") { block ->
             "\n## [${block.domain}] ${block.heading}\n${block.content}\n"
         }
         writeWholeFile(folderUri, fileName, "text/markdown", "# 灵感与笔记\n$body")
@@ -713,12 +927,9 @@ class RecordStore(private val context: Context) {
 
     private fun writeWholeFile(folderUri: String, fileName: String, mime: String, content: String) {
         val r = root(folderUri)
-        val file = r.findFile(fileName) ?: r.createFile(mime, fileName)
-            ?: throw IllegalStateException("创建 $fileName 失败")
-        context.contentResolver.openOutputStream(file.uri, "wt")?.use {
-            it.write(content.toByteArray(Charsets.UTF_8))
-        } ?: throw IllegalStateException("无法写入 $fileName")
-        DataChangeSignal.bump()
+        val file = StorageLayout.writableFile(context, r, fileName, mime)
+        serializedWrite { VerifiedFileWrite.replace(context, file, LedgerReader.expectedText(file.uri.toString()), content) }
+        DataChangeSignal.bump(StorageLayout.domainForFile(fileName))
     }
 
     private fun appendCsvRow(
@@ -751,15 +962,12 @@ class RecordStore(private val context: Context) {
         mime: String,
         headerIfNew: String,
         newLine: String
-    ) {
+    ) = writeLock.withLock {
         val r = root(folderUri)
-        var file = r.findFile(fileName)
-        val existing = if (file != null) {
-            context.contentResolver.openInputStream(file.uri)
-                ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
-        } else {
-            ""
-        }
+        var file = StorageLayout.readFile(r, fileName)
+        val existing = if (file != null) context.contentResolver.openInputStream(file.uri)
+            ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+            ?: throw IllegalStateException("无法读取已有的 $fileName，已停止写入以保护原始数据") else ""
         if (file == null) {
             // 账本.csv/待办.md/灵感.md 这几个文件正常情况下用过一次之后就应该一直存在——
             // 如果这次要新建的偏偏是这几个"核心记录"文件，很可能不是真的第一次用，而是
@@ -783,7 +991,7 @@ class RecordStore(private val context: Context) {
                     // 诊断记录本身失败不应该阻塞正常记录流程。
                 }
             }
-            file = r.createFile(mime, fileName) ?: throw IllegalStateException("创建 $fileName 失败")
+            file = StorageLayout.writableFile(context, r, fileName, mime)
         }
         val content = buildString {
             if (existing.isBlank()) {
@@ -796,17 +1004,17 @@ class RecordStore(private val context: Context) {
             append(newLine)
             append("\n")
         }
-        context.contentResolver.openOutputStream(file.uri, "wt")?.use {
-            it.write(content.toByteArray(Charsets.UTF_8))
-        } ?: throw IllegalStateException("无法写入 $fileName")
-        DataChangeSignal.bump()
+        VerifiedFileWrite.replace(context, file, existing, content)
+        DataChangeSignal.bump(StorageLayout.domainForFile(fileName))
     }
 
     companion object {
+        private const val TAG = "RecordStore"
+        private val writeLock = ReentrantLock(true)
         private const val UNCONFIRMED_DIR = "待确认"
         private const val DRAFT_PREFIX = "待确认_"
         private const val JSON_MARKER = "###RESULT_JSON###"
-        private const val BOM = "﻿"
+        private const val BOM = "\uFEFF"
         // 日常照片的根目录+两个分类子目录名，savePhoto/movePhoto/deletePhoto 共用
         private const val PHOTO_ROOT_DIR = "日常照片"
         private const val PHOTO_MEAL_DIR = "三餐"
@@ -815,6 +1023,7 @@ class RecordStore(private val context: Context) {
         // 跟卡片.csv/持仓.csv/交易记录.csv 这类允许随时首次创建的"状态文件"区分开。
         private val CORE_LOG_FILES = setOf("账本.csv", "待办.md", "灵感.md", "体重.csv")
     }
+
 }
 
 /** 一条「待确认」草稿——App 内确认/编辑刀陸列表用。见 [RecordStore.readPendingDrafts]。 */

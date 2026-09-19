@@ -1,0 +1,21 @@
+{
+  "reportId": "overall-daily-2026-09-17",
+  "domain": "overall",
+  "periodType": "daily",
+  "periodStart": "2026-09-17T00:00:00+08:00",
+  "periodEnd": "2026-09-17T23:59:59+08:00",
+  "generatedAt": 1789641600000,
+  "dataCutoff": "2026-09-17 23:59",
+  "title": "每日总报",
+  "summary": "测试报告",
+  "severity": "normal",
+  "sources": [{"path": "工作/待办.md", "modifiedAt": 1789641000000, "sha256": "test"}],
+  "missingData": [],
+  "domainSections": [
+    {"domain": "finance", "title": "财务建议", "summary": "暂无异常", "content": "保持记录。", "severity": "normal"},
+    {"domain": "health", "title": "健康建议", "summary": "注意睡眠", "content": "今晚提前休息。", "severity": "attention"},
+    {"domain": "work", "title": "工作建议", "summary": "关注测试事项", "content": "晨会确认测试事项。", "severity": "normal"},
+    {"domain": "growth", "title": "成长建议", "summary": "保持连续", "content": "完成一次英语阅读。", "severity": "normal"}
+  ],
+  "suggestedActions": [{"id": "action-1", "title": "确认测试事项", "reason": "验证闭环", "domain": "工作", "dueAt": "2026-09-18T09:00:00"}]
+}

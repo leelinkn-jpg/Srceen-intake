@@ -76,6 +76,7 @@ import com.linkn.screenintake.store.HealthMetricRow
 import com.linkn.screenintake.store.Holding
 import com.linkn.screenintake.store.LedgerReader
 import com.linkn.screenintake.store.LedgerRow
+import com.linkn.screenintake.classify.ExpensePurpose
 import com.linkn.screenintake.store.NoteItem
 import com.linkn.screenintake.store.PhotoItem
 import com.linkn.screenintake.store.PriceCache
@@ -83,38 +84,42 @@ import com.linkn.screenintake.store.QuoteFetcher
 import com.linkn.screenintake.store.RecordStore
 import com.linkn.screenintake.store.TodoItem
 import com.linkn.screenintake.store.TransferRow
+import com.linkn.screenintake.store.UiDataCache
 import com.linkn.screenintake.store.WeightRow
+import com.linkn.screenintake.report.ReportDomain
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * 底部财务/待办/灵感三个 Tab 的内容。数据来自 [LedgerReader] 现读现解析保存文件夹里的
- * 几个文件；点一下某一条就能弹出编辑框改内容或者删掉，改完/删完立刻整篇重写对应的文件、
- * 重新读一遍刷新列表。顶部标题栏和设置入口统一由外层的 [MainScaffold] 提供，这几个
- * 函数本身只负责内容区域。
- *
- * 财务这个 Tab 分三个子视图——收支流水、股票持仓、卡片余额——顶上有一张常驻的「总览」
- * 卡片，不管切到哪个子视图都看得到本月收支和当前总资产，不用来回切页面才能拼出全貌。
- * 卡片管理（以前在设置页里）也挪到了这里，跟它管的钱放在同一个 Tab 下更符合直觉。
+ * 财务 Tab 的内容：收支流水、股票持仓、卡片余额三个子视图，顶上一张常驻的「总览」卡片
+ * （不管切到哪个子视图都看得到本月收支和当前总资产）。卡片管理（以前在设置页里）也在
+ * 这里，跟它管的钱放在同一个 Tab 下更符合直觉。数据来自 [LedgerReader] 现读现解析保存
+ * 文件夹里的几个文件；点一下某一条就能弹出编辑框改内容或者删掉，改完/删完立刻整篇重写
+ * 对应的文件、重新读一遍刷新列表。顶部标题栏和设置入口统一由外层的 [MainScaffold] 提供，
+ * 这里只负责内容区域。（原来财务/待办/灵感/健康/工作/习惯几个 Tab 都写在同一个
+ * DataScreens.kt 里，2026-09-16 按 Tab 拆成了多个文件，都还在同一个 ui 包下，互相引用
+ * 不用加 import。）
  */
-private enum class FinanceTab { MONEY, HOLDINGS, CARDS }
+private enum class FinanceTab { MONEY, HOLDINGS, CARDS, ADVICE }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FinanceScreen(resumeTick: Int) {
     val context = LocalContext.current
     val folderUri = ScreenIntakeApp.instance.settingsStore.folderUri
-    var rows by remember { mutableStateOf(listOf<LedgerRow>()) }
+    var rows by remember { mutableStateOf(UiDataCache.ledger) }
     var editingRow by remember { mutableStateOf<LedgerRow?>(null) }
-    var holdings by remember { mutableStateOf(listOf<Holding>()) }
+    var holdings by remember { mutableStateOf(UiDataCache.holdings) }
     var editingHolding by remember { mutableStateOf<Holding?>(null) }
-    var cards by remember { mutableStateOf(listOf<CardAccount>()) }
+    var cards by remember { mutableStateOf(UiDataCache.cards) }
     var editingCard by remember { mutableStateOf<CardAccount?>(null) }
     // 转账记录.csv 只读展示用——转账不像收支/持仓那样有编辑弹窗，账户/金额认错了走
     // 「待确认」里删掉重来（见 PendingScreen 的提示），这里纯粹是给「卡片」页一个
     // 「最近转了什么」的可视化留痕，不提供改/删。
-    var transfers by remember { mutableStateOf(listOf<TransferRow>()) }
+    var transfers by remember { mutableStateOf(UiDataCache.transfers) }
     // 卡片页「转账」按钮用：点了某张卡的转账按钮，就把这张卡记成"转出方"、弹出转账表单
     // 选转入方+金额；跟 editingCard 分开管理，因为转账表单跟"编辑卡片"表单是两个不同的
     // 弹窗，不能共用同一个 state（点转账的时候要关掉编辑弹窗，不是改成转账弹窗的内容）。
@@ -148,12 +153,12 @@ fun FinanceScreen(resumeTick: Int) {
         }
     }
 
-    suspend fun reload() {
-        folderAccessible = withContext(Dispatchers.IO) { LedgerReader.folderAccessible(context, folderUri) }
-        holdings = withContext(Dispatchers.IO) { LedgerReader.readHoldings(context, folderUri) }
-        cards = withContext(Dispatchers.IO) { LedgerReader.readCards(context, folderUri) }
-        transfers = withContext(Dispatchers.IO) { LedgerReader.readTransfers(context, folderUri) }
-        rows = withContext(Dispatchers.IO) {
+    suspend fun reload() = coroutineScope {
+        val accessibleResult = async(Dispatchers.IO) { LedgerReader.folderAccessible(context, folderUri) }
+        val holdingsResult = async(Dispatchers.IO) { LedgerReader.readHoldings(context, folderUri) }
+        val cardsResult = async(Dispatchers.IO) { LedgerReader.readCards(context, folderUri) }
+        val transfersResult = async(Dispatchers.IO) { LedgerReader.readTransfers(context, folderUri) }
+        val rowsResult = async(Dispatchers.IO) {
             // 账本.csv 的「日期」只精确到天（少数带具体时间），同一天记的好几笔互相之间是
             // 「平局」，光按日期倒序排（sortedWith 是稳定排序）平局部分会保持原来在文件里
             // 的顺序，也就是先记的在前、后记的在后。但文件本身是按记录时间从旧到新往后
@@ -164,9 +169,13 @@ fun FinanceScreen(resumeTick: Int) {
             LedgerReader.readLedger(context, folderUri)
                 .sortedWith(compareByDescending<LedgerRow> { it.date }.thenByDescending { it.index })
         }
+        folderAccessible = accessibleResult.await()
+        holdings = holdingsResult.await().also { UiDataCache.holdings = it }
+        cards = cardsResult.await().also { UiDataCache.cards = it }
+        transfers = transfersResult.await().also { UiDataCache.transfers = it }
+        rows = rowsResult.await().also { UiDataCache.ledger = it }
     }
 
-    LaunchedEffect(Unit) { reload() }
     // 只在首次进入时读一遍是不够的：截屏/通知确认这些捕获路径经常不会把 App 带到前台，
     // 如果一直停在这个 Tab 没切走、也没离开过 App，看到的会是很久以前读到的旧数据——
     // 哪怕文件早就更新了。resumeTick 在 App 每次回到前台时 +1（MainActivity.onResume），
@@ -174,15 +183,22 @@ fun FinanceScreen(resumeTick: Int) {
     // 长按打字这几条捕获路径本来就是设计成不把 App 切到后台的，人如果正好停在这个 Tab
     // 上截屏记账，resumeTick 根本不会变——所以还要跟着 DataChangeSignal 走，
     // RecordStore 真正写完文件那一刻就会通知到，不用等回到前台或者切 Tab。
-    val financeChangeTick = DataChangeSignal.tick.value
+    val financeChangeTick = DataChangeSignal.forDomain("财务").value
     LaunchedEffect(resumeTick, financeChangeTick) { reload() }
 
     val monthPrefix = remember {
         java.text.SimpleDateFormat("yyyy-MM", java.util.Locale.CHINA).format(java.util.Date())
     }
-    val monthRows = rows.filter { it.date.startsWith(monthPrefix) }
-    val monthExpense = monthRows.filter { it.type == "支出" }.sumOf { it.amount }
-    val monthIncome = monthRows.filter { it.type == "收入" }.sumOf { it.amount }
+    val monthTotals = remember(rows, monthPrefix) {
+        rows.asSequence().filter { it.date.startsWith(monthPrefix) }
+            .fold(0.0 to 0.0) { totals, row ->
+                if (row.type == "支出") totals.copy(first = totals.first + row.amount)
+                else if (row.type == "收入") totals.copy(second = totals.second + row.amount)
+                else totals
+            }
+    }
+    val monthExpense = monthTotals.first
+    val monthIncome = monthTotals.second
     val monthBalance = monthIncome - monthExpense
     // 现金净额：储蓄卡是「有多少」直接加，信用卡记的是「欠款」所以要减掉；持仓市值
     // 优先用已经刷新到的实时价，没刷新过的（prices 里没有这个 key）就先按成本价估算，
@@ -220,10 +236,10 @@ fun FinanceScreen(resumeTick: Int) {
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 12.dp, vertical = 4.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
         ) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
                     "总览",
                     style = MaterialTheme.typography.titleSmall,
@@ -278,18 +294,13 @@ fun FinanceScreen(resumeTick: Int) {
             }
         }
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            FilterChip(selected = tab == FinanceTab.MONEY, onClick = { tab = FinanceTab.MONEY }, label = { Text("收支") })
-            FilterChip(selected = tab == FinanceTab.HOLDINGS, onClick = { tab = FinanceTab.HOLDINGS }, label = { Text("持仓") })
-            FilterChip(selected = tab == FinanceTab.CARDS, onClick = { tab = FinanceTab.CARDS }, label = { Text("卡片") })
-        }
+        UnifiedSectionTabs(
+            labels = listOf("收支", "持仓", "卡片", "建议"),
+            selectedIndex = tab.ordinal,
+            onSelected = { tab = FinanceTab.entries[it] }
+        )
 
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+        Box(modifier = Modifier.weight(1f).fillMaxWidth().sectionSwipes(tab.ordinal, FinanceTab.entries.size) { tab = FinanceTab.entries[it] }) {
             when (tab) {
                 FinanceTab.HOLDINGS -> HoldingsView(
                     holdings = holdings,
@@ -304,11 +315,19 @@ fun FinanceScreen(resumeTick: Int) {
                     onAdd = { editingCard = CardAccount(name = "", type = "储蓄", balance = 0.0, index = -1) },
                     onEditCard = { editingCard = it }
                 )
+                FinanceTab.ADVICE -> DomainAdviceScreen(ReportDomain.FINANCE, resumeTick)
                 FinanceTab.MONEY -> if (rows.isEmpty()) {
                     EmptyHint(if (folderAccessible) "还没有记录" else "暂时读不到记录")
                 } else {
-                    val expenseTotal = rows.filter { it.type == "支出" }.sumOf { it.amount }
-                    val incomeTotal = rows.filter { it.type == "收入" }.sumOf { it.amount }
+                    val totals = remember(rows) {
+                        rows.fold(0.0 to 0.0) { sum, row ->
+                            if (row.type == "支出") sum.copy(first = sum.first + row.amount)
+                            else if (row.type == "收入") sum.copy(second = sum.second + row.amount)
+                            else sum
+                        }
+                    }
+                    val expenseTotal = totals.first
+                    val incomeTotal = totals.second
                     val balance = incomeTotal - expenseTotal
 
                     Column(Modifier.fillMaxSize()) {
@@ -352,7 +371,7 @@ fun FinanceScreen(resumeTick: Int) {
                             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            items(rows) { row ->
+                            items(rows, key = { it.index }) { row ->
                                 val isExpense = row.type == "支出"
                                 val accent = if (isExpense) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
                                 Card(
@@ -368,12 +387,14 @@ fun FinanceScreen(resumeTick: Int) {
                                         Icon(CategoryIcons.iconFor(row.category), contentDescription = null, tint = accent)
                                         Spacer(Modifier.width(12.dp))
                                         Column(Modifier.weight(1f)) {
+                                            val detail = ExpensePurpose.withoutTag(row.note).ifBlank { row.category }
                                             Text(
-                                                row.category,
+                                                detail,
                                                 style = MaterialTheme.typography.titleSmall,
                                                 fontWeight = FontWeight.SemiBold
                                             )
-                                            val caption = if (row.note.isNotBlank()) "${row.date} · ${row.note}" else row.date
+                                            val purpose = ExpensePurpose.fromNote(row.note)
+                                            val caption = listOfNotNull(purpose, row.category, row.date).joinToString(" · ")
                                             Text(
                                                 caption,
                                                 style = MaterialTheme.typography.bodySmall,
@@ -399,18 +420,19 @@ fun FinanceScreen(resumeTick: Int) {
     editingRow?.let { row ->
         FinanceEditDialog(
             row = row,
+            cards = cards,
             onDismiss = { editingRow = null },
             onSave = { updated ->
                 editingRow = null
                 scope.launch(Dispatchers.IO) {
-                    RecordStore(context).updateLedgerRow(folderUri, row.index, updated)
+                    RecordStore(context).updateLedgerRow(folderUri, row, updated)
                     reload()
                 }
             },
             onDelete = {
                 editingRow = null
                 scope.launch(Dispatchers.IO) {
-                    RecordStore(context).deleteLedgerRow(folderUri, row.index)
+                    RecordStore(context).deleteLedgerRow(folderUri, row)
                     reload()
                 }
             }
@@ -424,14 +446,14 @@ fun FinanceScreen(resumeTick: Int) {
             onSave = { updated ->
                 editingHolding = null
                 scope.launch(Dispatchers.IO) {
-                    RecordStore(context).updateHolding(folderUri, holding.index, updated)
+                    RecordStore(context).updateHolding(folderUri, holding, updated)
                     reload()
                 }
             },
             onDelete = {
                 editingHolding = null
                 scope.launch(Dispatchers.IO) {
-                    RecordStore(context).deleteHolding(folderUri, holding.index)
+                    RecordStore(context).deleteHolding(folderUri, holding)
                     reload()
                 }
             }
@@ -450,7 +472,7 @@ fun FinanceScreen(resumeTick: Int) {
                     if (isNew) {
                         RecordStore(context).addCard(folderUri, updated)
                     } else {
-                        RecordStore(context).updateCard(folderUri, card.index, updated)
+                        RecordStore(context).updateCard(folderUri, card, updated)
                     }
                     reload()
                 }
@@ -458,7 +480,7 @@ fun FinanceScreen(resumeTick: Int) {
             onDelete = {
                 editingCard = null
                 scope.launch(Dispatchers.IO) {
-                    RecordStore(context).deleteCard(folderUri, card.index)
+                    RecordStore(context).deleteCard(folderUri, card)
                     reload()
                 }
             },
@@ -514,23 +536,21 @@ private fun FinanceSummaryItem(
 @Composable
 private fun FinanceEditDialog(
     row: LedgerRow,
+    cards: List<CardAccount>,
     onDismiss: () -> Unit,
     onSave: (LedgerRow) -> Unit,
     onDelete: () -> Unit
 ) {
-    var isExpense by remember { mutableStateOf(row.type != "收入") }
+    val isExpense = row.type != "收入"
     var category by remember { mutableStateOf(row.category) }
     var amountText by remember { mutableStateOf(if (row.amount == 0.0) "" else row.amount.toString()) }
-    var note by remember { mutableStateOf(row.note) }
+    var note by remember { mutableStateOf(ExpensePurpose.withoutTag(row.note)) }
+    var purpose by remember { mutableStateOf(ExpensePurpose.fromNote(row.note)) }
+    var cardName by remember { mutableStateOf(ExpensePurpose.cardFromNote(row.note)) }
     var date by remember { mutableStateOf(row.date) }
     var categoryMenuExpanded by remember { mutableStateOf(false) }
 
-    val categories = if (isExpense) Categories.EXPENSE else Categories.INCOME
-    LaunchedEffect(isExpense) {
-        // 支出/收入切换之后，原来的分类可能不在新类型的列表里，退回第一个，避免留着
-        // 一个新列表里选不中、也看不出对应关系的无效分类。
-        if (category !in categories) category = categories.first()
-    }
+    val categories = if (isExpense) ScreenIntakeApp.instance.settingsStore.expenseCategories else Categories.INCOME
 
     Dialog(onDismissRequest = onDismiss) {
         Card(
@@ -545,10 +565,7 @@ private fun FinanceEditDialog(
             ) {
                 Text("编辑记录", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
 
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(selected = isExpense, onClick = { isExpense = true }, label = { Text("支出") })
-                    FilterChip(selected = !isExpense, onClick = { isExpense = false }, label = { Text("收入") })
-                }
+                Text(if (isExpense) "消费" else "收入", style = MaterialTheme.typography.labelLarge)
 
                 ExposedDropdownMenuBox(
                     expanded = categoryMenuExpanded,
@@ -588,6 +605,9 @@ private fun FinanceEditDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
 
+                if (isExpense) ExpensePurposePicker(purpose) { purpose = it }
+                ExpenseCardPicker(cardName, cards) { cardName = it }
+
                 OutlinedTextField(
                     value = note,
                     onValueChange = { note = it },
@@ -614,10 +634,10 @@ private fun FinanceEditDialog(
                         Button(onClick = {
                             onSave(
                                 row.copy(
-                                    type = if (isExpense) "支出" else "收入",
+                                    type = row.type,
                                     category = category,
                                     amount = amountText.toDoubleOrNull() ?: row.amount,
-                                    note = note,
+                                    note = ExpensePurpose.withNote(note, if (isExpense) purpose else null, cardName),
                                     date = date.ifBlank { row.date }
                                 )
                             )
@@ -1150,777 +1170,6 @@ private fun TransferDialog(
                         ) { Text("确认转账") }
                     }
                 }
-            }
-        }
-    }
-}
-
-@Composable
-fun TodoListScreen(resumeTick: Int, domainFilter: String? = null) {
-    val context = LocalContext.current
-    val folderUri = ScreenIntakeApp.instance.settingsStore.folderUri
-    var todos by remember { mutableStateOf(listOf<TodoItem>()) }
-    var editingTodo by remember { mutableStateOf<TodoItem?>(null) }
-    // 勾选之后不直接删掉——挪到「已办」这个子列表里，既让「待办」列表不被做完的事情占地方，
-    // 又不会真的丢掉记录（跟这个 App 其它地方"不静默丢内容"的原则一致），取消勾选还能挪回来。
-    var showDone by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-
-    suspend fun reload() {
-        todos = withContext(Dispatchers.IO) { LedgerReader.readTodos(context, folderUri) }
-    }
-
-    LaunchedEffect(Unit) { reload() }
-    val todoChangeTick = DataChangeSignal.tick.value
-    LaunchedEffect(resumeTick, todoChangeTick) { reload() }
-
-    val scoped = if (domainFilter == null) todos else todos.filter { it.domain == domainFilter }
-    val activeCount = scoped.count { !it.done }
-    val doneCount = scoped.count { it.done }
-    val visible = scoped.filter { it.done == showDone }
-
-    Column(modifier = Modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            FilterChip(selected = !showDone, onClick = { showDone = false }, label = { Text("待办（$activeCount）") })
-            FilterChip(selected = showDone, onClick = { showDone = true }, label = { Text("已办（$doneCount）") })
-        }
-
-        if (visible.isEmpty()) {
-            EmptyHint(if (showDone) "还没有已办的事项" else "待办事项都做完啦")
-        } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(visible, key = { it.index }) { todo ->
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { editingTodo = todo },
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                if (todo.done) Icons.Filled.CheckCircle else Icons.Filled.RadioButtonUnchecked,
-                                contentDescription = if (todo.done) "点一下标为未完成" else "点一下标为已完成",
-                                tint = if (todo.done) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                },
-                                modifier = Modifier.clickable {
-                                    scope.launch(Dispatchers.IO) {
-                                        RecordStore(context).updateTodo(folderUri, todo.index, !todo.done, todo.text, todo.domain)
-                                        reload()
-                                    }
-                                }
-                            )
-                            Spacer(Modifier.width(12.dp))
-                            Text(
-                                todo.text,
-                                style = MaterialTheme.typography.bodyMedium,
-                                textDecoration = if (todo.done) TextDecoration.LineThrough else null
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    editingTodo?.let { todo ->
-        TodoEditDialog(
-            todo = todo,
-            onDismiss = { editingTodo = null },
-            onSave = { newText, newDone, newDomain ->
-                editingTodo = null
-                scope.launch(Dispatchers.IO) {
-                    RecordStore(context).updateTodo(folderUri, todo.index, newDone, newText, newDomain)
-                    reload()
-                }
-            },
-            onDelete = {
-                editingTodo = null
-                scope.launch(Dispatchers.IO) {
-                    RecordStore(context).deleteTodo(folderUri, todo.index)
-                    reload()
-                }
-            }
-        )
-    }
-}
-
-@Composable
-private fun TodoEditDialog(
-    todo: TodoItem,
-    onDismiss: () -> Unit,
-    onSave: (text: String, done: Boolean, domain: String) -> Unit,
-    onDelete: () -> Unit
-) {
-    var text by remember { mutableStateOf(todo.text) }
-    var done by remember { mutableStateOf(todo.done) }
-    var domain by remember { mutableStateOf(todo.domain) }
-
-    Dialog(onDismissRequest = onDismiss) {
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-        ) {
-            Column(
-                modifier = Modifier
-                    .padding(20.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Text("编辑待办", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-
-                OutlinedTextField(
-                    value = text,
-                    onValueChange = { text = it },
-                    label = { Text("内容") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Switch(checked = done, onCheckedChange = { done = it })
-                    Spacer(Modifier.width(8.dp))
-                    Text(if (done) "已完成" else "未完成")
-                }
-
-                Text("归到哪个领域", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    ClassifyResult.DOMAINS.forEach { d ->
-                        FilterChip(selected = domain == d, onClick = { domain = d }, label = { Text(d) })
-                    }
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    TextButton(onClick = onDelete) {
-                        Text("删除", color = MaterialTheme.colorScheme.error)
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(onClick = onDismiss) { Text("取消") }
-                        Button(onClick = { onSave(text, done, domain) }) { Text("保存") }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun NoteListScreen(resumeTick: Int, domainFilter: String? = null) {
-    val context = LocalContext.current
-    val folderUri = ScreenIntakeApp.instance.settingsStore.folderUri
-    var notes by remember { mutableStateOf(listOf<NoteItem>()) }
-    var editingNote by remember { mutableStateOf<NoteItem?>(null) }
-    val scope = rememberCoroutineScope()
-
-    suspend fun reload() {
-        notes = withContext(Dispatchers.IO) { LedgerReader.readNotes(context, folderUri) }
-    }
-
-    LaunchedEffect(Unit) { reload() }
-    val noteChangeTick = DataChangeSignal.tick.value
-    LaunchedEffect(resumeTick, noteChangeTick) { reload() }
-
-    val scoped = if (domainFilter == null) notes else notes.filter { it.domain == domainFilter }
-
-    if (scoped.isEmpty()) {
-        EmptyHint("还没有灵感记录")
-    } else {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            items(scoped) { note ->
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { editingNote = note },
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                ) {
-                    Column(Modifier.padding(12.dp)) {
-                        Text(
-                            note.heading,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        if (note.content.isNotBlank()) {
-                            Spacer(Modifier.height(4.dp))
-                            Text(note.content, style = MaterialTheme.typography.bodyMedium)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    editingNote?.let { note ->
-        NoteEditDialog(
-            note = note,
-            onDismiss = { editingNote = null },
-            onSave = { newContent, newDomain ->
-                editingNote = null
-                scope.launch(Dispatchers.IO) {
-                    RecordStore(context).updateNote(folderUri, note.index, newContent, newDomain)
-                    reload()
-                }
-            },
-            onDelete = {
-                editingNote = null
-                scope.launch(Dispatchers.IO) {
-                    RecordStore(context).deleteNote(folderUri, note.index)
-                    reload()
-                }
-            }
-        )
-    }
-}
-
-@Composable
-private fun NoteEditDialog(
-    note: NoteItem,
-    onDismiss: () -> Unit,
-    onSave: (content: String, domain: String) -> Unit,
-    onDelete: () -> Unit
-) {
-    var content by remember { mutableStateOf(note.content) }
-    var domain by remember { mutableStateOf(note.domain) }
-
-    Dialog(onDismissRequest = onDismiss) {
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-        ) {
-            Column(
-                modifier = Modifier
-                    .padding(20.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Text("编辑灵感", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Text(
-                    "记录时间：${note.heading}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                OutlinedTextField(
-                    value = content,
-                    onValueChange = { content = it },
-                    label = { Text("内容") },
-                    minLines = 3,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 120.dp)
-                )
-
-                Text("归到哪个领域", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    ClassifyResult.DOMAINS.forEach { d ->
-                        FilterChip(selected = domain == d, onClick = { domain = d }, label = { Text(d) })
-                    }
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    TextButton(onClick = onDelete) {
-                        Text("删除", color = MaterialTheme.colorScheme.error)
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(onClick = onDismiss) { Text("取消") }
-                        Button(onClick = { onSave(content, domain) }) { Text("保存") }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun EmptyHint(text: String) {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
-/**
- * 健康 Tab：跟财务 Tab 同一套样式——顶上一张常驻的「总览」卡片（体重/恢复评分/压力值
- * 这些最新数字，不管切到哪个子视图都看得到），下面用切换按钮分 饮食/饮料/体重 三块。
- * 饮食、饮料是长按拍照记下来的照片列表（各自一个文件夹，AI 只做"吃的还是喝的"这一步
- * 轻量分类，不弹确认，见 [com.linkn.screenintake.capture.CapturePipeline.classifyPhotoAndSave]
- * 头部注释）；体重那块是体重趋势图 + Whoop 恢复评分趋势图 + 最近体重记录，跟"身体状态"
- * 归一类。习惯 Tab 目前还没有专门的追踪数据文件，先维持占位，见 [HabitScreen]。
- */
-@Composable
-fun HealthScreen(resumeTick: Int) {
-    val context = LocalContext.current
-    val folderUri = ScreenIntakeApp.instance.settingsStore.folderUri
-    var weights by remember { mutableStateOf(listOf<WeightRow>()) }
-    var metrics by remember { mutableStateOf(listOf<HealthMetricRow>()) }
-    var tab by remember { mutableStateOf(HealthTab.WEIGHT) }
-
-    suspend fun reload() {
-        weights = withContext(Dispatchers.IO) {
-            LedgerReader.readWeights(context, folderUri).sortedBy { it.date }
-        }
-        metrics = withContext(Dispatchers.IO) {
-            LedgerReader.readHealthMetrics(context, folderUri).sortedBy { it.date }
-        }
-    }
-
-    LaunchedEffect(Unit) { reload() }
-    val changeTick = DataChangeSignal.tick.value
-    LaunchedEffect(resumeTick, changeTick) { reload() }
-
-    val latestWeight = weights.lastOrNull()
-    // 恢复评分/睡眠不一定每天都有（脚本抓不到就留空，或者 Whoop 还没同步过来），从最后
-    // 往前找第一条真的有值的，不直接拿最后一行——不然万一最后一天缺了这几项，总览卡片
-    // 就会显示"--"，看着像坏了。
-    val latestRecovery = metrics.lastOrNull { it.recoveryScore != null }
-    val latestSleep = metrics.lastOrNull { it.sleepHours != null }
-
-    Column(Modifier.fillMaxSize()) {
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
-        ) {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(
-                    "总览",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                )
-                // 四个主要指标排成 2x2：睡眠、饮食情况、恢复情况、体重。饮食情况（卡路里
-                // 缺口、口味这些）目前先占位显示"--"——这块要等长按拍照存下来的三餐/饮料
-                // 照片被 Mac 那边的模型分析完、写回一个同步文件之后才有数据，见跟他讨论过
-                // 的方案；且 Whoop 恢复情况/睡眠这两项现在实际上也读不到，因为手机这边
-                // Syncthing 文件夹设成了"仅发送"——这个模式下 Mac 写的 健康.csv 传是传
-                // 过来了，但手机本地会直接忽略、不落盘（Syncthing 官方文档原话：send only
-                // 模式下"来自其它设备的改动都会被忽略，虽然还是会收到，文件夹会因此显示
-                // 「不同步」，但不会真的应用这些改动"），得把手机这边的文件夹类型从"仅发送"
-                // 改成"发送并接收"，Mac 写的文件才能真正同步到手机上。
-                Row(modifier = Modifier.fillMaxWidth()) {
-                    HealthSummaryItem(
-                        modifier = Modifier.weight(1f),
-                        label = "睡眠",
-                        value = latestSleep?.sleepHours?.let { "%.1fh".format(it) } ?: "--"
-                    )
-                    HealthSummaryItem(
-                        modifier = Modifier.weight(1f),
-                        label = "饮食情况",
-                        value = "--"
-                    )
-                }
-                Row(modifier = Modifier.fillMaxWidth()) {
-                    HealthSummaryItem(
-                        modifier = Modifier.weight(1f),
-                        label = "恢复情况",
-                        value = latestRecovery?.recoveryScore?.let { "%.0f".format(it) } ?: "--"
-                    )
-                    HealthSummaryItem(
-                        modifier = Modifier.weight(1f),
-                        label = "体重",
-                        value = latestWeight?.let { "%.1fkg".format(it.weightKg) } ?: "--"
-                    )
-                }
-                if (weights.isEmpty() && metrics.isEmpty()) {
-                    Text(
-                        "还没有体重或 Whoop 数据——称完体重截个屏，或者把 Whoop 同步脚本跑起来、" +
-                            "手机这边的同步文件夹改成「发送并接收」之后，这里就会有数据了；" +
-                            "「饮食情况」还在等三餐/饮料照片的分析功能做完。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                }
-            }
-        }
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            FilterChip(selected = tab == HealthTab.MEAL, onClick = { tab = HealthTab.MEAL }, label = { Text("饮食") })
-            FilterChip(selected = tab == HealthTab.DRINK, onClick = { tab = HealthTab.DRINK }, label = { Text("饮料") })
-            FilterChip(selected = tab == HealthTab.WEIGHT, onClick = { tab = HealthTab.WEIGHT }, label = { Text("体重") })
-        }
-
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            when (tab) {
-                HealthTab.MEAL -> PhotoGalleryView(category = "meal", folderUri = folderUri)
-                HealthTab.DRINK -> PhotoGalleryView(category = "drink", folderUri = folderUri)
-                HealthTab.WEIGHT -> Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .verticalScroll(rememberScrollState())
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    TrendCard(
-                        title = "体重趋势",
-                        points = weights.takeLast(30).map { it.date to it.weightKg },
-                        valueFormat = { "%.1fkg".format(it) },
-                        emptyHint = "还没有体重记录，或者记录还不够两条——称完体重截个屏，AI 确认后就会出现在这里。"
-                    )
-
-                    TrendCard(
-                        title = "恢复评分趋势（Whoop）",
-                        points = metrics.filter { it.recoveryScore != null }.takeLast(30)
-                            .map { it.date to it.recoveryScore!! },
-                        valueFormat = { "%.0f".format(it) },
-                        emptyHint = "还没有 Whoop 数据，或者数据还不够两天——把 whoop_sync.py 跑起来之后，" +
-                            "这里就会有趋势线了。"
-                    )
-
-                    if (weights.isNotEmpty()) {
-                        Card {
-                            Column(Modifier.padding(16.dp)) {
-                                Text(
-                                    "最近体重记录",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Spacer(Modifier.height(8.dp))
-                                weights.takeLast(10).reversed().forEach { row ->
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(vertical = 4.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Text(row.date, style = MaterialTheme.typography.bodySmall)
-                                        Text(
-                                            "%.1fkg".format(row.weightKg),
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            fontWeight = FontWeight.Medium
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-private enum class HealthTab { MEAL, DRINK, WEIGHT }
-
-/**
- * 饮食/饮料列表——每一行一张缩略图 + AI 给的一句话描述 + 拍摄时间，右边两个按钮：
- * 「改归类」（AI 把吃的喝的分错了，直接挪到另一个文件夹）、「删除」（拍糊了/拍错了）。
- * 长按拍照那条路径判断完直接自动归档、不走「待确认」，这两个按钮就是补救分错类的
- * 唯一入口，见 [com.linkn.screenintake.capture.CapturePipeline.classifyPhotoAndSave]。
- */
-@Composable
-private fun PhotoGalleryView(category: String, folderUri: String) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var photos by remember(category) { mutableStateOf(listOf<PhotoItem>()) }
-
-    suspend fun reload() {
-        photos = withContext(Dispatchers.IO) { LedgerReader.readPhotos(context, folderUri, category) }
-    }
-
-    LaunchedEffect(category) { reload() }
-    val changeTick = DataChangeSignal.tick.value
-    LaunchedEffect(category, changeTick) { reload() }
-
-    if (photos.isEmpty()) {
-        EmptyHint(
-            if (category == "drink") {
-                "还没有饮料照片——长按音量上键拍一张喝的，AI 判断完会自动出现在这里"
-            } else {
-                "还没有饮食照片——长按音量上键拍一张吃的，AI 判断完会自动出现在这里"
-            }
-        )
-        return
-    }
-
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        items(photos, key = { it.fileName }) { photo ->
-            PhotoRow(
-                photo = photo,
-                folderUri = folderUri,
-                onMove = {
-                    scope.launch(Dispatchers.IO) {
-                        val target = if (photo.category == "drink") "meal" else "drink"
-                        RecordStore(context).movePhoto(folderUri, photo.fileName, photo.category, target)
-                        reload()
-                    }
-                },
-                onDelete = {
-                    scope.launch(Dispatchers.IO) {
-                        RecordStore(context).deletePhoto(folderUri, photo.fileName, photo.category)
-                        reload()
-                    }
-                }
-            )
-        }
-    }
-}
-
-@Composable
-private fun PhotoRow(
-    photo: PhotoItem,
-    folderUri: String,
-    onMove: () -> Unit,
-    onDelete: () -> Unit
-) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            PhotoThumbnail(folderUri = folderUri, category = photo.category, fileName = photo.fileName)
-            Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    photo.caption ?: "（没识别出描述）",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium
-                )
-                Text(
-                    photoTimeLabel(photo.timestampMillis),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            IconButton(onClick = onMove) {
-                Icon(
-                    Icons.Default.SwapHoriz,
-                    contentDescription = if (photo.category == "drink") "改成饮食" else "改成饮料"
-                )
-            }
-            IconButton(onClick = onDelete) {
-                Icon(Icons.Default.Delete, contentDescription = "删除")
-            }
-        }
-    }
-}
-
-/** 缩略图：先只读边界算缩放倍数、再按缩放后的尺寸解码，避免相机原图（好几 MB）整张塞进
- * 内存——项目里没有引入 Coil/Glide 这类图片加载库，解码逻辑在 [LedgerReader.loadPhotoThumbnail]
- * 里手写。加载中或者加载失败（比如文件被移走了一瞬间）就先显示一块空底色，不崩不留白洞。 */
-@Composable
-private fun PhotoThumbnail(folderUri: String, category: String, fileName: String) {
-    val context = LocalContext.current
-    var bitmap by remember(fileName) { mutableStateOf<Bitmap?>(null) }
-    LaunchedEffect(fileName, category) {
-        bitmap = withContext(Dispatchers.IO) {
-            LedgerReader.loadPhotoThumbnail(context, folderUri, category, fileName)
-        }
-    }
-    Box(
-        modifier = Modifier
-            .size(56.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-    ) {
-        bitmap?.let { bmp ->
-            Image(
-                bitmap = bmp.asImageBitmap(),
-                contentDescription = null,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
-            )
-        }
-    }
-}
-
-private val photoTimeFmt = java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.CHINA)
-
-private fun photoTimeLabel(millis: Long): String = photoTimeFmt.format(java.util.Date(millis))
-
-/** 健康 Tab「总览」卡片里的一小格——跟财务 Tab 的 [FinanceSummaryItem] 是同一个视觉位置，
- * 但体重/恢复评分这些不是"钱"，不能套"¥%.2f"那个格式，所以单独做一个只接格式化好的
- * 字符串的版本，格式化逻辑交给调用方自己决定（kg、纯数字、百分比都能塞）。 */
-@Composable
-private fun HealthSummaryItem(modifier: Modifier = Modifier, label: String, value: String) {
-    Column(modifier) {
-        Text(
-            label,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Text(
-            value,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onPrimaryContainer
-        )
-    }
-}
-
-/**
- * 健康 Tab 里"体重趋势""恢复评分趋势"这类简单折线图共用的卡片：标题 + 折线图 +
- * 首尾日期 + 最低/最高值。点数少于 2 个画不出线，退化成显示 [emptyHint]。
- * points 是 (日期, 数值) 的列表，按时间正序传进来；valueFormat 决定数值怎么格式化显示
- * （kg、纯分数……）。
- */
-@Composable
-private fun TrendCard(
-    title: String,
-    points: List<Pair<String, Double>>,
-    valueFormat: (Double) -> String,
-    emptyHint: String
-) {
-    Card {
-        Column(Modifier.padding(16.dp)) {
-            Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(8.dp))
-            if (points.size < 2) {
-                Text(
-                    emptyHint,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            } else {
-                SimpleTrendChart(
-                    values = points.map { it.second },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(140.dp)
-                )
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(
-                        points.first().first,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        points.last().first,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(
-                        "最低 " + valueFormat(points.minOf { it.second }),
-                        style = MaterialTheme.typography.labelSmall
-                    )
-                    Text(
-                        "最高 " + valueFormat(points.maxOf { it.second }),
-                        style = MaterialTheme.typography.labelSmall
-                    )
-                }
-            }
-        }
-    }
-}
-
-/** 最简单的折线图：等距横坐标（不按真实日期间隔画，简单起见每个点占一样的宽度），
- * 纵坐标按数值在最小-最大之间的比例线性映射。只是给"最近趋势往上走还是往下走"一个
- * 直观感觉，不是精确的数据可视化工具，所以没做坐标轴刻度、没做点击查看具体值这些。 */
-@Composable
-private fun SimpleTrendChart(values: List<Double>, modifier: Modifier = Modifier) {
-    val lineColor = MaterialTheme.colorScheme.primary
-    val gridColor = MaterialTheme.colorScheme.outlineVariant
-    Canvas(modifier = modifier) {
-        val minV = values.min()
-        val maxV = values.max()
-        val range = (maxV - minV).let { if (it < 0.01) 1.0 else it }
-        val paddingV = 8.dp.toPx()
-        val usableH = size.height - paddingV * 2
-        val stepX = if (values.size > 1) size.width / (values.size - 1) else 0f
-
-        fun yFor(v: Double): Float {
-            val t = ((v - minV) / range).toFloat().coerceIn(0f, 1f)
-            return paddingV + usableH * (1f - t)
-        }
-
-        drawLine(
-            color = gridColor,
-            start = Offset(0f, size.height - paddingV),
-            end = Offset(size.width, size.height - paddingV),
-            strokeWidth = 1.dp.toPx()
-        )
-
-        val points = values.mapIndexed { index, v -> Offset(index * stepX, yFor(v)) }
-        for (i in 0 until points.size - 1) {
-            drawLine(
-                color = lineColor,
-                start = points[i],
-                end = points[i + 1],
-                strokeWidth = 3.dp.toPx(),
-                cap = StrokeCap.Round
-            )
-        }
-        points.forEach { p -> drawCircle(color = lineColor, radius = 4.dp.toPx(), center = p) }
-    }
-}
-
-@Composable
-fun HabitScreen(resumeTick: Int) {
-    EmptyHint("习惯这块还没有专门的数据记录，功能正在开发中。")
-}
-
-private enum class WorkTab { TODO, NOTE }
-
-/**
- * 工作 Tab：待办/灵感基本上都是工作相关的，所以不像最初设计那样在四个领域 Tab 里各放一块
- * 摘要卡片，而是整个搬到这里、做成跟财务 Tab 收支/持仓/卡片一样的 FilterChip 切换子视图
- * 样式——待办/灵感直接复用 [TodoListScreen]/[NoteListScreen]，用 domainFilter = "工作"
- * 过滤成只看跟工作相关的那部分（如果某条被 AI 分到了别的领域但其实是工作事项，可以在
- * 编辑弹窗里改一下领域标签）。其它领域（财务/健康/习惯，以及"其他"兜底桶）下的待办/灵感
- * 仍然存在，只是不在各自 Tab 里露出，要看全部靠顶部齿轮旁边的"收件箱"图标。
- */
-@Composable
-fun WorkScreen(resumeTick: Int) {
-    var tab by remember { mutableStateOf(WorkTab.TODO) }
-
-    Column(Modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            FilterChip(selected = tab == WorkTab.TODO, onClick = { tab = WorkTab.TODO }, label = { Text("待办") })
-            FilterChip(selected = tab == WorkTab.NOTE, onClick = { tab = WorkTab.NOTE }, label = { Text("灵感") })
-        }
-
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            when (tab) {
-                WorkTab.TODO -> TodoListScreen(resumeTick = resumeTick, domainFilter = "工作")
-                WorkTab.NOTE -> NoteListScreen(resumeTick = resumeTick, domainFilter = "工作")
             }
         }
     }

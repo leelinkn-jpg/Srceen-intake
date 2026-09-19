@@ -1,12 +1,15 @@
 package com.linkn.screenintake.ui
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,18 +20,22 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -36,6 +43,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.linkn.screenintake.ScreenIntakeApp
@@ -43,11 +52,17 @@ import com.linkn.screenintake.capture.CaptureConfirmActions
 import com.linkn.screenintake.capture.PendingCaptureNotifier
 import com.linkn.screenintake.classify.Categories
 import com.linkn.screenintake.classify.ClassifyResult
+import com.linkn.screenintake.store.CardAccount
 import com.linkn.screenintake.store.PendingDraft
+import com.linkn.screenintake.store.LedgerReader
 import com.linkn.screenintake.store.RecordStore
 import com.linkn.screenintake.store.UnconfirmedNote
+import com.linkn.screenintake.work.WorkChange
+import com.linkn.screenintake.work.WorkChangeRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import android.widget.Toast
 
 /**
  * 底部导航「待确认」那个 Tab 的内容——以前只在首页/顶部横幅露个数字，点了也没
@@ -68,6 +83,7 @@ import kotlinx.coroutines.launch
 fun PendingScreen(
     drafts: List<PendingDraft>,
     notes: List<UnconfirmedNote>,
+    workChanges: List<WorkChange> = emptyList(),
     loading: Boolean,
     onReload: () -> Unit
 ) {
@@ -76,19 +92,23 @@ fun PendingScreen(
     val folderUri = ScreenIntakeApp.instance.settingsStore.folderUri
 
     var editingDraft by remember { mutableStateOf<PendingDraft?>(null) }
-    // 点卡片本身（不是下面那几个按钮）是「看完整内容」，跟「编辑」分开——编辑是要改内容，
-    // 这个纯粹是内容被截断看不全时，点进去看全乎的原文。
-    var detailDraft by remember { mutableStateOf<PendingDraft?>(null) }
     var detailNote by remember { mutableStateOf<UnconfirmedNote?>(null) }
 
     fun act(block: suspend () -> Unit) {
         scope.launch(Dispatchers.IO) {
-            block()
-            onReload()
+            try {
+                block()
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, e.message ?: "保存失败，请稍后重试", Toast.LENGTH_LONG).show()
+                }
+            } finally {
+                withContext(Dispatchers.Main) { onReload() }
+            }
         }
     }
 
-    if (drafts.isEmpty() && notes.isEmpty()) {
+    if (drafts.isEmpty() && notes.isEmpty() && workChanges.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             if (loading) {
                 CircularProgressIndicator()
@@ -105,10 +125,9 @@ fun PendingScreen(
             items(drafts, key = { it.draftId }) { draft ->
                 DraftCard(
                     draft = draft,
-                    onClick = { detailDraft = draft },
                     onConfirm = {
+                        val result = draft.result ?: return@DraftCard
                         act {
-                            val result = draft.result ?: return@act
                             CaptureConfirmActions.confirmOrEdit(context, draft.draftId, result, null)
                             PendingCaptureNotifier.cancel(context, draft.draftId.hashCode())
                         }
@@ -121,6 +140,23 @@ fun PendingScreen(
                         }
                     }
                 )
+            }
+            if (workChanges.isNotEmpty()) {
+                item { Text("工作变更", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            }
+            items(workChanges, key = { it.id }) { change ->
+                Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(change.title, style = MaterialTheme.typography.titleMedium)
+                        if (change.before.isNotBlank()) Text("原记录：${change.before}", style = MaterialTheme.typography.bodySmall)
+                        if (change.after.isNotBlank()) Text("建议变为：${change.after}")
+                        if (change.evidence.isNotBlank()) Text("依据：${change.evidence}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            TextButton(onClick = { act { WorkChangeRepository(context).respond(folderUri, change, false) } }) { Text("不采纳") }
+                            Button(onClick = { act { WorkChangeRepository(context).respond(folderUri, change, true) } }) { Text("确认") }
+                        }
+                    }
+                }
             }
             if (notes.isNotEmpty()) {
                 item {
@@ -152,19 +188,16 @@ fun PendingScreen(
         EditDraftDialog(
             result = result,
             onDismiss = { editingDraft = null },
-            onSubmit = { editedText, dueAt ->
+            onSubmit = { updated ->
                 editingDraft = null
                 act {
-                    CaptureConfirmActions.confirmOrEdit(context, draft.draftId, result, editedText, dueAt)
+                    CaptureConfirmActions.confirmOrEdit(context, draft.draftId, updated, null, updated.dueAt)
                     PendingCaptureNotifier.cancel(context, draft.draftId.hashCode())
                 }
             }
         )
     }
 
-    detailDraft?.let { draft ->
-        DraftDetailDialog(draft = draft, onDismiss = { detailDraft = null })
-    }
     detailNote?.let { note ->
         NoteDetailDialog(note = note, onDismiss = { detailNote = null })
     }
@@ -173,21 +206,25 @@ fun PendingScreen(
 @Composable
 private fun DraftCard(
     draft: PendingDraft,
-    onClick: () -> Unit,
     onConfirm: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
     val result = draft.result
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-    ) {
+    Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             if (result != null) {
                 Text(result.typeLabel(), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
                 Text(result.displaySummary(), style = MaterialTheme.typography.bodyLarge)
+                if (result.isExpense || result.isIncome) {
+                    Text(
+                        "支付卡片：${result.card?.takeIf { it.isNotBlank() } ?: "未识别"}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (result.card.isNullOrBlank()) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
             } else {
                 Text("旧版草稿（缺少结构化数据，只能看/删）", style = MaterialTheme.typography.labelLarge)
             }
@@ -245,15 +282,18 @@ private fun DraftCard(
             }
             Row(
                 modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-                horizontalArrangement = Arrangement.End
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                TextButton(onClick = onDelete) {
-                    Text("删除", color = MaterialTheme.colorScheme.error)
-                }
+                OutlinedButton(
+                    onClick = onDelete,
+                    modifier = Modifier.weight(1f),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) { Text("删除") }
                 if (result != null) {
-                    TextButton(onClick = onEdit) { Text("编辑") }
+                    OutlinedButton(onClick = onEdit, modifier = Modifier.weight(1f)) { Text("调整") }
                     if (!missingDueTime) {
-                        Button(onClick = onConfirm) { Text("确认") }
+                        Button(onClick = onConfirm, modifier = Modifier.weight(1f)) { Text("确认") }
                     }
                 }
             }
@@ -284,43 +324,57 @@ private fun NoteCard(note: UnconfirmedNote, onClick: () -> Unit, onDelete: () ->
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun EditDraftDialog(
     result: ClassifyResult,
     onDismiss: () -> Unit,
-    onSubmit: (String, String?) -> Unit
+    onSubmit: (ClassifyResult) -> Unit
 ) {
-    val prefill = if (result.isIgnore) "" else if (result.isExpense || result.isIncome) {
-        result.category.orEmpty()
-    } else {
-        result.summary.orEmpty()
+    val standardTypes = linkedMapOf(
+        "todo" to "待办", "note" to "灵感", "expense" to "支出",
+        "income" to "收入", "meal_note" to "饮食"
+    )
+    var selectedType by remember {
+        mutableStateOf(result.type.takeIf { it in standardTypes } ?: "note")
     }
-    var text by remember { mutableStateOf(prefill) }
-
-    // 记账/收入类编辑的其实是「分类」这个固定枚举字段（见 ClassifyResult.withEdit），
-    // 与其每次都手打「餐饮」「日用」这几个高频词，不如把 Categories 里定好的那份列表
-    // 摆成一排可点的常用选项——点一下直接把分类文本填好，还想再改字/打别的词，
-    // 下面的输入框仍然可以直接编辑，两者不冲突。忽略/待办/灵感这些改的是自由文本
-    // （summary），没有固定分类可选，不显示这一排。
-    val quickCategories = when {
-        result.isExpense -> Categories.EXPENSE
-        result.isIncome -> Categories.INCOME
-        else -> emptyList()
+    var content by remember { mutableStateOf(result.summary ?: result.merchant.orEmpty()) }
+    var category by remember { mutableStateOf(result.category.orEmpty()) }
+    var amount by remember { mutableStateOf(result.amount?.toString().orEmpty()) }
+    var todoKind by remember { mutableStateOf(if (result.domain == "工作") "工作" else "其他") }
+    var noteDomain by remember {
+        mutableStateOf(result.normalizedDomain().let { if (it == "习惯") "成长" else it })
+    }
+    var purpose by remember { mutableStateOf(result.purpose) }
+    val context = LocalContext.current
+    val folderUri = ScreenIntakeApp.instance.settingsStore.folderUri
+    val cards by produceState(initialValue = emptyList<CardAccount>(), folderUri) {
+        value = withContext(Dispatchers.IO) { LedgerReader.readCards(context, folderUri) }
+    }
+    // “银行(1156)”和卡片管理的“银行1156”不是同一串文字，但尾号相同就自动预选。
+    fun matchingCardName(raw: String?): String? {
+        if (raw.isNullOrBlank()) return null
+        val digits = raw.filter(Char::isDigit)
+        val compact = raw.lowercase().filter(Char::isLetterOrDigit)
+        return cards.firstOrNull { account ->
+            val accountDigits = account.name.filter(Char::isDigit)
+            val accountCompact = account.name.lowercase().filter(Char::isLetterOrDigit)
+            (digits.length >= 4 && accountDigits.takeLast(4) == digits.takeLast(4)) ||
+                (compact.isNotBlank() && (accountCompact.contains(compact) || compact.contains(accountCompact)))
+        }?.name
+    }
+    var card by remember(result.card) { mutableStateOf<String?>(null) }
+    LaunchedEffect(cards, result.card) {
+        if (card == null) card = matchingCardName(result.card)
     }
 
-    // 待办事项必须有具体提醒时间——不管是截屏/拍照识别出来本来就没抽到时间，还是
-    // 手动打字时模型漏抽了，都要能在这个弹窗里用系统的日期+时间选择器直接补上，
-    // 不能只靠文本框里手打（打字既麻烦又没法保证格式对，dueAt 需要严格的
-    // yyyy-MM-ddTHH:mm:ss）。有旧值就带出来当初始值，方便只是想改一下时间点的情况。
     var pickedDueAt by remember {
         mutableStateOf(
-            if (result.isTodo) result.dueAt?.let {
+            result.dueAt?.let {
                 try { java.time.LocalDateTime.parse(it) } catch (e: Exception) { null }
-            } else null
+            }
         )
     }
-    val context = LocalContext.current
     val dueAtDisplay = pickedDueAt?.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
 
     fun launchDateTimePicker() {
@@ -344,7 +398,12 @@ private fun EditDraftDialog(
         ).show()
     }
 
-    val canSubmit = text.isNotBlank() && (!result.isTodo || pickedDueAt != null)
+    val moneyValid = amount.toDoubleOrNull()?.let { it > 0 } == true && category.isNotBlank()
+    val canSubmit = when (selectedType) {
+        "todo" -> content.isNotBlank() && pickedDueAt != null
+        "expense", "income" -> moneyValid
+        else -> content.isNotBlank()
+    }
 
     Dialog(onDismissRequest = onDismiss) {
         Card(modifier = Modifier.fillMaxWidth()) {
@@ -354,65 +413,87 @@ private fun EditDraftDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text("编辑", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Text(result.editHint(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                if (quickCategories.isNotEmpty()) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        quickCategories.forEach { cat ->
-                            FilterChip(
-                                selected = text == cat,
-                                onClick = { text = cat },
-                                label = { Text(cat) }
-                            )
-                        }
+                Text("确认记录", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text("记录类型", style = MaterialTheme.typography.labelLarge)
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    standardTypes.forEach { (value, label) ->
+                        FilterChip(selected = selectedType == value, onClick = {
+                            selectedType = value
+                        }, label = { Text(label) })
                     }
                 }
-                if (result.isTodo) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedTextField(
-                            value = dueAtDisplay ?: "",
-                            onValueChange = {},
-                            readOnly = true,
-                            enabled = false,
-                            label = { Text("提醒时间") },
-                            placeholder = { Text("未设置，必须选一个") },
-                            modifier = Modifier.weight(1f)
-                        )
-                        Button(onClick = { launchDateTimePicker() }) {
-                            Text(if (pickedDueAt == null) "选择时间" else "改时间")
+
+                if (selectedType == "expense" || selectedType == "income") {
+                    OutlinedTextField(
+                        value = amount,
+                        onValueChange = { amount = it.filter { ch -> ch.isDigit() || ch == '.' } },
+                        label = { Text("金额") }, prefix = { Text("¥") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.fillMaxWidth(), singleLine = true
+                    )
+                    if (selectedType == "expense") {
+                        ExpenseCategoryPicker(category) { category = it }
+                        ExpensePurposePicker(purpose) { purpose = it }
+                    } else {
+                        OutlinedTextField(category, { category = it }, label = { Text("收入分类") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                    }
+                    ExpenseCardPicker(card, cards) { card = it }
+                }
+                if (selectedType == "todo") {
+                    Text("待办类型", style = MaterialTheme.typography.labelLarge)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("工作", "其他").forEach { value ->
+                            FilterChip(selected = todoKind == value, onClick = { todoKind = value }, label = { Text(value) })
                         }
+                    }
+                    OutlinedButton(onClick = { launchDateTimePicker() }, modifier = Modifier.fillMaxWidth()) {
+                        Text(dueAtDisplay?.let { "提醒时间：$it（点击修改）" } ?: "选择提醒日期和时间")
                     }
                     if (pickedDueAt == null) {
                         Text(
-                            "待办事项必须设置具体提醒时间，不然存了也提醒不了你",
+                            "请选择提醒时间",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.error
                         )
                     }
                 }
+                if (selectedType == "note") {
+                    Text("灵感分类", style = MaterialTheme.typography.labelLarge)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        listOf("工作", "其他").forEach { value ->
+                            FilterChip(selected = noteDomain == value, onClick = { noteDomain = value }, label = { Text(value) })
+                        }
+                    }
+                }
                 OutlinedTextField(
-                    value = text,
-                    onValueChange = { text = it },
-                    label = { Text(result.editHint()) },
-                    minLines = 2,
-                    modifier = Modifier.fillMaxWidth()
+                    value = content, onValueChange = { content = it },
+                    label = { Text(if (selectedType == "expense" || selectedType == "income") "说明" else "具体内容") },
+                    minLines = 2, modifier = Modifier.fillMaxWidth()
                 )
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     TextButton(onClick = onDismiss) { Text("取消") }
                     Button(
                         onClick = {
-                            val dueAtIso = if (result.isTodo) {
-                                pickedDueAt?.format(java.time.format.DateTimeFormatter.ISO_LOCAL_DATE_TIME)
-                            } else null
-                            onSubmit(text.trim(), dueAtIso)
+                            val dueAtIso = pickedDueAt?.format(java.time.format.DateTimeFormatter.ISO_LOCAL_DATE_TIME)
+                            val domain = when (selectedType) {
+                                "todo" -> todoKind
+                                "note" -> if (noteDomain == "成长") "习惯" else noteDomain
+                                else -> result.domain
+                            }
+                            onSubmit(result.copy(
+                                type = selectedType,
+                                amount = if (selectedType == "expense" || selectedType == "income") amount.toDoubleOrNull() else result.amount,
+                                category = if (selectedType == "expense" || selectedType == "income") category.trim() else result.category,
+                                summary = content.trim(), domain = domain,
+                                dueAt = if (selectedType == "todo") dueAtIso else null,
+                                whenText = if (selectedType == "todo") dueAtDisplay else null,
+                                purpose = if (selectedType == "expense") purpose else null,
+                                card = if (selectedType == "expense" || selectedType == "income") card else null
+                            ))
                         },
                         enabled = canSubmit
                     ) { Text("提交") }
@@ -493,39 +574,22 @@ fun InboxScreen(
     notes: List<UnconfirmedNote>,
     loading: Boolean,
     onReload: () -> Unit,
-    initialDomain: String? = null
+    initialDomain: String? = null,
+    pendingOpenTick: Int = 0
 ) {
-    var subTab by remember(initialDomain) {
+    var subTab by remember(initialDomain, pendingOpenTick) {
         mutableStateOf(if (initialDomain != null) InboxSubTab.TODO else InboxSubTab.PENDING)
     }
-    var domainFilter by remember(initialDomain) { mutableStateOf(initialDomain) }
+    var domainFilter by remember(initialDomain, pendingOpenTick) { mutableStateOf(initialDomain) }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            FilterChip(
-                selected = subTab == InboxSubTab.PENDING,
-                onClick = { subTab = InboxSubTab.PENDING },
-                label = { Text("待确认（${drafts.size + notes.size}）") }
-            )
-            FilterChip(
-                selected = subTab == InboxSubTab.TODO,
-                onClick = { subTab = InboxSubTab.TODO },
-                label = { Text("全部待办") }
-            )
-            FilterChip(
-                selected = subTab == InboxSubTab.NOTE,
-                onClick = { subTab = InboxSubTab.NOTE },
-                label = { Text("全部灵感") }
-            )
-        }
+        UnifiedSectionTabs(
+            labels = listOf("待确认（${drafts.size + notes.size}）", "全部待办", "全部灵感"),
+            selectedIndex = subTab.ordinal,
+            onSelected = { subTab = InboxSubTab.entries[it] }
+        )
 
-        if (subTab != InboxSubTab.PENDING) {
+        if (subTab == InboxSubTab.NOTE) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -549,7 +613,7 @@ fun InboxScreen(
                     loading = loading,
                     onReload = onReload
                 )
-                InboxSubTab.TODO -> TodoListScreen(resumeTick = resumeTick, domainFilter = domainFilter)
+                InboxSubTab.TODO -> TodoListScreen(resumeTick = resumeTick, domainFilter = null)
                 InboxSubTab.NOTE -> NoteListScreen(resumeTick = resumeTick, domainFilter = domainFilter)
             }
         }
