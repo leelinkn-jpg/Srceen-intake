@@ -103,7 +103,10 @@ fun AiReportCenterScreen(resumeTick: Int) {
             if (pageReports.isEmpty()) {
                 EmptyHint("还没有 Mini 回传的${pagePeriod?.label ?: "报告"}")
             } else {
-                LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                // HorizontalPager centers children that do not claim its height.
+                // The list must fill the page, otherwise a short report list sits
+                // visually in the middle of the screen.
+                LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(pageReports, key = { "${it.id}:${it.revision}" }) { item ->
                         Card(Modifier.fillMaxWidth().clickable { detail = item; repo.markRead(item); ReportChangeSignal.bump() }) {
                             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {

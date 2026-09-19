@@ -174,20 +174,24 @@ fun MeetingScreen(resumeTick: Int) {
                     meetingName = record.name.ifBlank { MeetingRecord.defaultName(record.createdAt, record.testOnly) }
                 },
                 footer = {
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        TextButton(onClick = { playback(record) }, enabled = !live.busy && !playbackLoading) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                        TextButton(
+                            onClick = { playback(record) }, enabled = !live.busy && !playbackLoading,
+                            modifier = Modifier.heightIn(min = 36.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                        ) {
                             Text(if (playingId == record.id) "停止" else "播放")
                         }
-                        TextButton(enabled = record.status == "ready" || record.parts.isNotEmpty(), onClick = {
+                        TextButton(
+                            enabled = record.status == "ready" || record.parts.isNotEmpty(), onClick = {
                             scope.launch {
                                 runCatching { withContext(Dispatchers.IO) { repo.transcriptText(record) } }
                                     .onSuccess { detail = it }.onFailure { error = it.message.orEmpty() }
                             }
-                        }) { Text("文字") }
+                        }, modifier = Modifier.heightIn(min = 36.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text("文字") }
                         if (!record.synced) TextButton(enabled = !live.busy, onClick = {
                             work(MeetingRecorderService.EXPORT, record)
-                        }) { Text("重新同步") }
-                        TextButton(enabled = !live.busy, onClick = { deleteTarget = record }) { Text("删除") }
+                        }, modifier = Modifier.heightIn(min = 36.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text("重新同步") }
+                        TextButton(enabled = !live.busy, onClick = { deleteTarget = record }, modifier = Modifier.heightIn(min = 36.dp), contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) { Text("删除") }
                     }
                 }
             )
