@@ -38,6 +38,7 @@ import com.linkn.screenintake.report.AiReportRepository
 import com.linkn.screenintake.report.ReportChangeSignal
 import com.linkn.screenintake.report.ReportDomain
 import com.linkn.screenintake.report.ReportPeriod
+import com.linkn.screenintake.report.isReportActionPending
 import com.linkn.screenintake.store.UiDataCache
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -136,7 +137,7 @@ fun DomainAdviceScreen(domain: ReportDomain, resumeTick: Int) {
     fun reload() { scope.launch { reports = withContext(Dispatchers.IO) { repo.list(folder) }.also { UiDataCache.reports = it } } }
     LaunchedEffect(resumeTick, change) { reload() }
     val entries = reports.mapNotNull { report -> report.sections.firstOrNull { it.domain == domain }?.let { report to it } }
-    val feedback = rememberReportFeedback(repo, folder, reports, change)
+    val feedbackState = rememberReportFeedback(repo, folder, reports, change)
     if (entries.isEmpty()) {
         Text("暂无${domain.label}建议", modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
         return
@@ -158,15 +159,14 @@ fun DomainAdviceScreen(domain: ReportDomain, resumeTick: Int) {
                     }
                 }
             }
-            val actions = report.actions.filter { action -> actionDomain(action.domain) == domain }
+            val actions = if (feedbackState.loaded) report.actions.filter { action ->
+                actionDomain(action.domain) == domain && isReportActionPending(feedbackState.values[report.id to action.id])
+            } else emptyList()
             items(actions, key = { "${report.id}:${it.id}" }) { action ->
-                val status = feedback[report.id to action.id]
                 Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     Text(action.title, style = MaterialTheme.typography.titleSmall)
                     if (action.reason.isNotBlank()) Text(action.reason, style = MaterialTheme.typography.bodySmall)
-                    if (status != null) Text(if (status == "accepted") "已写入待办" else "已忽略",
-                        color = MaterialTheme.colorScheme.primary)
-                    else Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(onClick = { scope.launch { runCatching { withContext(Dispatchers.IO) { repo.respond(folder, report, action, true) } }
                             .onSuccess { reload() }.onFailure { error = it.message ?: "写入失败" } } }) { Text("确认写入待办") }
                         TextButton(onClick = { scope.launch { runCatching { withContext(Dispatchers.IO) { repo.respond(folder, report, action, false) } }
@@ -190,7 +190,7 @@ fun DomainAdvicePanel(domain: ReportDomain, resumeTick: Int) {
     val change = ReportChangeSignal.tick.value
     LaunchedEffect(resumeTick, change, refresh) { report = withContext(Dispatchers.IO) { repo.latest(folder) } }
     var error by remember { mutableStateOf("") }
-    val feedback = rememberReportFeedback(repo, folder, listOfNotNull(report), change)
+    val feedbackState = rememberReportFeedback(repo, folder, listOfNotNull(report), change)
     val current = report
     val section = current?.sections?.firstOrNull { it.domain == domain }
     if (current == null || section == null) {
@@ -205,13 +205,13 @@ fun DomainAdvicePanel(domain: ReportDomain, resumeTick: Int) {
             if (section.content.isNotBlank()) Text(section.content)
         } }
         if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error)
-        current.actions.filter { actionDomain(it.domain) == domain }.forEach { action ->
-            val status = feedback[current.id to action.id]
+        if (feedbackState.loaded) current.actions.filter {
+            actionDomain(it.domain) == domain && isReportActionPending(feedbackState.values[current.id to it.id])
+        }.forEach { action ->
             Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 Text(action.title, style = MaterialTheme.typography.titleSmall)
                 if (action.reason.isNotBlank()) Text(action.reason, style = MaterialTheme.typography.bodySmall)
-                if (status != null) Text(if (status == "accepted") "已写入待办" else "已忽略")
-                else Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = { scope.launch { runCatching { withContext(Dispatchers.IO) { repo.respond(folder, current, action, true) } }
                         .onSuccess { refresh++; error = "" }.onFailure { error = it.message ?: "保存失败，请重试" } } }) { Text("确认写入待办") }
                     TextButton(onClick = { scope.launch { runCatching { withContext(Dispatchers.IO) { repo.respond(folder, current, action, false) } }
@@ -222,15 +222,17 @@ fun DomainAdvicePanel(domain: ReportDomain, resumeTick: Int) {
     }
 }
 
+private data class ReportFeedbackState(val values: Map<Pair<String, String>, String?> = emptyMap(), val loaded: Boolean = false)
+
 @Composable
-private fun rememberReportFeedback(repo: AiReportRepository, folder: String, reports: List<AiReport>, change: Long): Map<Pair<String, String>, String?> {
-    var feedback by remember(folder) { mutableStateOf<Map<Pair<String, String>, String?>>(emptyMap()) }
+private fun rememberReportFeedback(repo: AiReportRepository, folder: String, reports: List<AiReport>, change: Long): ReportFeedbackState {
+    var feedback by remember(folder) { mutableStateOf(ReportFeedbackState()) }
     LaunchedEffect(folder, reports, change) {
-        feedback = withContext(Dispatchers.IO) {
+        feedback = ReportFeedbackState(withContext(Dispatchers.IO) {
             reports.flatMap { report -> report.actions.map { action ->
                 (report.id to action.id) to repo.feedback(folder, report.id, action.id)
             } }.toMap()
-        }
+        }, loaded = true)
     }
     return feedback
 }
@@ -239,7 +241,7 @@ private fun rememberReportFeedback(repo: AiReportRepository, folder: String, rep
 private fun ReportDetailDialog(report: AiReport, repo: AiReportRepository, folder: String, onDismiss: () -> Unit) {
     val scope = rememberCoroutineScope()
     var error by remember { mutableStateOf("") }
-    var actionFeedback by remember(report.id, folder) { mutableStateOf<Map<String, String?>>(emptyMap()) }
+    var actionFeedback by remember(report.id, folder) { mutableStateOf<Map<String, String?>?>(null) }
     LaunchedEffect(report.id, folder) {
         actionFeedback = withContext(Dispatchers.IO) { report.actions.associate { action -> action.id to repo.feedback(folder, report.id, action.id) } }
     }
@@ -300,22 +302,23 @@ private fun ReportDetailDialog(report: AiReport, repo: AiReportRepository, folde
                         }
                     }
                 }
-                if (report.actions.isNotEmpty()) item {
+                val pendingActions = actionFeedback?.let { statuses ->
+                    report.actions.filter { isReportActionPending(statuses[it.id]) }
+                }.orEmpty()
+                if (pendingActions.isNotEmpty()) item {
                     Text("建议动作", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 }
-                items(report.actions, key = { it.id }) { action ->
-                    val status = actionFeedback[action.id]
+                items(pendingActions, key = { it.id }) { action ->
                     Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
                         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                         Text(action.title, style = MaterialTheme.typography.titleSmall)
                         if (action.reason.isNotBlank()) Text(action.reason, style = MaterialTheme.typography.bodySmall)
-                        if (status != null) Text(if (status == "accepted") "已写入待办" else "已忽略", color = MaterialTheme.colorScheme.primary)
-                        else Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(onClick = { scope.launch { runCatching { withContext(Dispatchers.IO) { repo.respond(folder, report, action, true) } }
-                                .onSuccess { actionFeedback = actionFeedback + (action.id to "accepted") }.onFailure { error = it.message ?: "写入失败" } } }) { Text("写入待办") }
+                                .onSuccess { actionFeedback = actionFeedback.orEmpty() + (action.id to "accepted") }.onFailure { error = it.message ?: "写入失败" } } }) { Text("写入待办") }
                             TextButton(onClick = { scope.launch { runCatching { withContext(Dispatchers.IO) { repo.respond(folder, report, action, false) } }
-                                .onSuccess { actionFeedback = actionFeedback + (action.id to "rejected") }.onFailure { error = it.message ?: "保存失败" } } }) { Text("忽略") }
+                                .onSuccess { actionFeedback = actionFeedback.orEmpty() + (action.id to "rejected") }.onFailure { error = it.message ?: "保存失败" } } }) { Text("忽略") }
                         }
                     } }
                 }
