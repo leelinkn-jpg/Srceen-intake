@@ -30,9 +30,17 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DirectionsBike
+import androidx.compose.material.icons.filled.DirectionsRun
+import androidx.compose.material.icons.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FitnessCenter
+import androidx.compose.material.icons.filled.Hiking
+import androidx.compose.material.icons.filled.Pool
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
+import androidx.compose.material.icons.filled.SelfImprovement
+import androidx.compose.material.icons.filled.SportsSoccer
+import androidx.compose.material.icons.filled.SportsTennis
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
@@ -64,6 +72,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -313,7 +322,7 @@ private fun ExerciseView(rows: List<ExerciseRow>) {
                 row.maxHeartRate?.let { add("最高 %d".format(it.toInt())) }
                 row.distanceMeters?.takeIf { it > 0 }?.let { add("%.1f km".format(it / 1000)) }
             }
-            RecordRowCard(Icons.Filled.DirectionsBike, exerciseTypeLabel(row.type),
+            RecordRowCard(exerciseTypeIcon(row.type), exerciseTypeLabel(row.type),
                 "${localExerciseTime(row.startedAt)} · ${exerciseDuration(row.startedAt, row.endedAt)}",
                 detail = info.joinToString(" · "))
         }
@@ -326,6 +335,21 @@ private fun exerciseTypeLabel(raw: String) = when (raw.lowercase()) {
     "cycling" -> "骑行"
     "activity" -> "活动训练"
     else -> raw.ifBlank { "运动" }
+}
+
+/** WHOOP uses English activity codes; map the common ones to a recognisable record icon. */
+private fun exerciseTypeIcon(raw: String): ImageVector {
+    val type = raw.lowercase()
+    return when {
+        type.contains("run") -> Icons.Filled.DirectionsRun
+        type.contains("walk") || type.contains("hiking") -> if (type.contains("hiking")) Icons.Filled.Hiking else Icons.Filled.DirectionsWalk
+        type.contains("cycl") || type.contains("bike") -> Icons.Filled.DirectionsBike
+        type.contains("swim") -> Icons.Filled.Pool
+        type.contains("yoga") || type.contains("pilates") || type.contains("meditat") -> Icons.Filled.SelfImprovement
+        type.contains("soccer") || type.contains("football") || type.contains("basketball") || type.contains("volleyball") -> Icons.Filled.SportsSoccer
+        type.contains("tennis") || type.contains("badminton") || type.contains("squash") -> Icons.Filled.SportsTennis
+        else -> Icons.Filled.FitnessCenter
+    }
 }
 
 private fun localExerciseTime(value: String) = runCatching {
