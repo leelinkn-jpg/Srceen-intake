@@ -140,8 +140,8 @@ fun MeetingScreen(resumeTick: Int) {
         }
     }
 
-    LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = RecordListContentPadding,
+        verticalArrangement = Arrangement.spacedBy(RecordListSpacing)) {
         item {
             if (live.busy) {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {

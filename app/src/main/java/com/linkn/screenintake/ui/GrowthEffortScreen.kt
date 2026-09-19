@@ -135,7 +135,7 @@ fun GrowthEffortScreen(resumeTick: Int) {
         )
         if (error.isNotBlank()) Text(error, modifier = Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error)
         SectionPager(pagerState, Modifier.weight(1f).fillMaxWidth()) { page ->
-            LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            LazyColumn(contentPadding = RecordListContentPadding, verticalArrangement = Arrangement.spacedBy(RecordListSpacing)) {
 
         if (page == 0) {
             active?.let { running -> item {

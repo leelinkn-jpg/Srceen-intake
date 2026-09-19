@@ -117,6 +117,12 @@ internal fun EmptyHint(text: String) {
 }
 
 /** Shared visual language for every time-based record: icon, main fact, context, then action. */
+// A single rhythm for ledger, health, meeting and growth records.  Keeping the
+// list gap separate from card padding prevents each screen from feeling like it
+// uses a different density.
+internal val RecordListContentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp)
+internal val RecordListSpacing = 8.dp
+
 @Composable
 internal fun RecordRowCard(
     icon: ImageVector,
@@ -130,13 +136,13 @@ internal fun RecordRowCard(
 ) {
     val cardModifier = Modifier.fillMaxWidth().then(if (onClick == null) Modifier else Modifier.clickable(onClick = onClick))
     Card(cardModifier, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-        Column(Modifier.padding(12.dp)) {
+        Column(Modifier.padding(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
-                    Modifier.size(42.dp).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.primaryContainer),
+                    Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.primaryContainer),
                     contentAlignment = Alignment.Center
                 ) { Icon(icon, contentDescription = null, tint = iconTint) }
-                Spacer(Modifier.width(12.dp))
+                Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                     if (subtitle.isNotBlank()) Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

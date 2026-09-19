@@ -236,7 +236,7 @@ fun HealthScreen(resumeTick: Int) {
                         .fillMaxSize()
                         .verticalScroll(rememberScrollState())
                         .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     TrendCard(
                         title = "体重趋势",
@@ -294,7 +294,7 @@ private enum class HealthTab { MEAL, DRINK, ALCOHOL, WEIGHT, EXERCISE, DIGITAL, 
 @Composable
 private fun ExerciseView(rows: List<ExerciseRow>) {
     if (rows.isEmpty()) return EmptyHint("还没有 WHOOP 运动记录")
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = RecordListContentPadding, verticalArrangement = Arrangement.spacedBy(RecordListSpacing)) {
         item {
             val recent = rows.take(30)
             val totalCalories = recent.sumOf { it.calories ?: 0.0 }
@@ -345,7 +345,7 @@ private fun DigitalHealthView(rows: List<DigitalHealthRow>, folderUri: String) {
     var candidates by remember { mutableStateOf(emptyList<GrowthUsageCandidate>()) }
     fun reloadCandidates() = scope.launch { candidates = withContext(Dispatchers.IO) { repo.growthUsageCandidates(folderUri) } }
     LaunchedEffect(folderUri, DataChangeSignal.tick.value) { reloadCandidates() }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = RecordListContentPadding, verticalArrangement = Arrangement.spacedBy(RecordListSpacing)) {
         item {
             DigitalTrendCard(rows.takeLast(30))
         }

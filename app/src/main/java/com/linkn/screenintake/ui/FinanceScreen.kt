@@ -370,8 +370,8 @@ fun FinanceScreen(resumeTick: Int) {
                         }
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                            contentPadding = RecordListContentPadding,
+                            verticalArrangement = Arrangement.spacedBy(RecordListSpacing)
                         ) {
                             items(rows, key = { it.index }) { row ->
                                 val isExpense = row.type == "支出"
