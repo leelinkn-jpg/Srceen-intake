@@ -25,6 +25,9 @@ class LocalDataIndexWorker(context: Context, params: WorkerParameters) : Corouti
             SystemStatus.failure(applicationContext, "读取", "保存目录尚未选择或暂时不可访问，保留上次内容")
             return@runCatching Result.success()
         }
+        // Hydrate once before fresh reads, so an Activity starting during this worker cannot
+        // replace newer memory values with yesterday's disk snapshot.
+        UiSnapshot.load(applicationContext, folder)
         val generationAtStart = DataChangeSignal.currentGeneration()
         val failuresAtStart = SystemStatus.failureGeneration("读取")
         val ledger = LedgerReader.readLedger(applicationContext, folder)

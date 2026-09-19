@@ -9,6 +9,7 @@ import java.security.MessageDigest
 
 /** Versioned, rebuildable read model. Never synced and never used to perform a write. */
 object UiSnapshot {
+    private var loadedFolder: String? = null
     private fun file(context: Context, folder: String): AtomicFile {
         val key = MessageDigest.getInstance("SHA-256").digest(folder.toByteArray()).joinToString("") { "%02x".format(it) }
         return AtomicFile(File(context.cacheDir, "read-model-$key.json"))
@@ -34,6 +35,7 @@ object UiSnapshot {
     }
 
     @Synchronized fun load(context: Context, folder: String) {
+        if (folder.isBlank() || loadedFolder == folder) return
         val generation = DataChangeSignal.currentGeneration()
         runCatching {
             val json = JSONObject(file(context, folder).openRead().bufferedReader().use { it.readText() })
@@ -68,5 +70,6 @@ object UiSnapshot {
                 UiDataCache.meetings = meetings; UiDataCache.growthActivities = activities; UiDataCache.growthEfforts = efforts
             }
         }
+        loadedFolder = folder
     }
 }

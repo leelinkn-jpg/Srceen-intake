@@ -37,6 +37,25 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual("failed", self.read()["status"])
         self.assertEqual(2, self.read()["attempt"])
 
+    def test_unchanged_queue_does_not_rewrite_or_repeat(self):
+        self.run_job()
+        state = self.read()
+        self.run_job()
+        self.assertEqual(state, self.read())
+
+    def test_weekend_has_no_work_daily(self):
+        self.run_job()
+        self.assertEqual(["健康", "成长"], [d["domain"] for d in self.read()["domains"]])
+
+    def test_calendar_override_includes_work(self):
+        calendar = self.root / "calendar.json"
+        calendar.write_text(json.dumps({"workdays": ["2026-09-19"]}))
+        result = subprocess.run([sys.executable, str(ENTRY), "--root", str(self.root),
+                                 "--date", "2026-09-19", "--trigger", "test", "--calendar", str(calendar)],
+                                env={**os.environ, "MIAOJI_MODEL_RUNNER": ""}, capture_output=True)
+        self.assertEqual(0, result.returncode)
+        self.assertEqual("工作", self.read()["domains"][0]["domain"])
+
     def test_complete_is_idempotent_but_late_data_creates_revision(self):
         self.run_job()
         state = self.read()

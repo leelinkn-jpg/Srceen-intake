@@ -23,7 +23,9 @@ def main():
     feedback = root / "综合报告/反馈"
     if feedback.exists():
         for path in feedback.glob("*.json"):
-            try: expired = int(json.loads(path.read_text(encoding="utf-8")).get("respondedAt", 0)) < cutoff
+            try:
+                responded = json.loads(path.read_text(encoding="utf-8")).get("respondedAt")
+                expired = isinstance(responded, int) and 0 < responded < cutoff
             except Exception: expired = False
             if expired:
                 print(("删除：" if a.apply else "将删除：") + str(path))
