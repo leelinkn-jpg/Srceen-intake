@@ -29,6 +29,9 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DirectionsBike
+import androidx.compose.material.icons.filled.Devices
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.Button
@@ -247,31 +250,10 @@ fun HealthScreen(resumeTick: Int) {
                     // 状态变量继续留着给总览卡片用。
 
                     if (weights.isNotEmpty()) {
-                        Card {
-                            Column(Modifier.padding(16.dp)) {
-                                Text(
-                                    "最近体重记录",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Spacer(Modifier.height(8.dp))
-                                weights.takeLast(10).reversed().forEach { row ->
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable { editingWeight = row }
-                                            .padding(vertical = 4.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Text(row.date, style = MaterialTheme.typography.bodySmall)
-                                        Text(
-                                            "%.1fkg".format(row.weightKg),
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            fontWeight = FontWeight.Medium
-                                        )
-                                    }
-                                }
-                            }
+                        Text("最近体重记录", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                        weights.takeLast(10).reversed().forEach { row ->
+                            RecordRowCard(Icons.Filled.Favorite, "%.1f kg".format(row.weightKg), row.date,
+                                detail = row.note.takeIf { it.isNotBlank() }, onClick = { editingWeight = row })
                         }
                     }
                 }
@@ -322,20 +304,16 @@ private fun ExerciseView(rows: List<ExerciseRow>) {
             }
         }
         items(rows, key = { "${it.startedAt}-${it.type}" }) { row ->
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(exerciseTypeLabel(row.type), style = MaterialTheme.typography.titleSmall)
-                    Text("${localExerciseTime(row.startedAt)} · ${exerciseDuration(row.startedAt, row.endedAt)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    val info = buildList {
-                        row.strain?.let { add("Strain %.1f".format(it)) }
-                        row.calories?.let { add("%d 千卡".format(it.toInt())) }
-                        row.averageHeartRate?.let { add("平均心率 %d".format(it.toInt())) }
-                        row.maxHeartRate?.let { add("最高 %d".format(it.toInt())) }
-                        row.distanceMeters?.takeIf { it > 0 }?.let { add("%.1f km".format(it / 1000)) }
-                    }
-                    if (info.isNotEmpty()) Text(info.joinToString(" · "), style = MaterialTheme.typography.bodyMedium)
-                }
+            val info = buildList {
+                row.strain?.let { add("Strain %.1f".format(it)) }
+                row.calories?.let { add("%d 千卡".format(it.toInt())) }
+                row.averageHeartRate?.let { add("平均心率 %d".format(it.toInt())) }
+                row.maxHeartRate?.let { add("最高 %d".format(it.toInt())) }
+                row.distanceMeters?.takeIf { it > 0 }?.let { add("%.1f km".format(it / 1000)) }
             }
+            RecordRowCard(Icons.Filled.DirectionsBike, exerciseTypeLabel(row.type),
+                "${localExerciseTime(row.startedAt)} · ${exerciseDuration(row.startedAt, row.endedAt)}",
+                detail = info.joinToString(" · "))
         }
     }
 }
@@ -388,10 +366,8 @@ private fun DigitalHealthView(rows: List<DigitalHealthRow>, folderUri: String) {
         items(rows.reversed(), key = { it.date }) { row ->
             val feeds = row.apps.filter { it.feed }.sumOf { it.minutes }
             val growth = row.apps.filter { it.growth }.sumOf { it.minutes }
-            Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(row.date, style = MaterialTheme.typography.titleSmall)
-                Text("总时长 ${formatMinutes(row.totalMinutes)} · 信息流 ${formatMinutes(feeds)} · 成长 ${formatMinutes(growth)}", style = MaterialTheme.typography.bodyMedium)
-            } }
+            RecordRowCard(Icons.Filled.Devices, row.date,
+                "总时长 ${formatMinutes(row.totalMinutes)} · 信息流 ${formatMinutes(feeds)} · 成长 ${formatMinutes(growth)}")
         }
     }
 }

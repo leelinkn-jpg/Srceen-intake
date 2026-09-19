@@ -137,6 +137,34 @@ fun TodoListScreen(resumeTick: Int, domainFilter: String? = null) {
     val buckets = if (domainFilter == null) listOf("工作", "其他", "已办") else listOf("待办", "已办")
     val selectedBucketIndex = buckets.indexOf(selectedBucket).coerceAtLeast(0)
     val visible = visibleFor(selectedBucket)
+    val pagerState = rememberSyncedSectionPagerState(selectedBucketIndex, buckets.size) { selectedBucket = buckets[it] }
+    @Composable fun TodoRows(rows: List<TodoItem>, bucket: String) {
+        if (rows.isEmpty()) {
+            EmptyHint(if (bucket == "已办") "还没有已办的事项" else "这里还没有待办")
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(rows, key = { it.index }) { todo ->
+                    Card(Modifier.fillMaxWidth().clickable { editingTodo = todo }, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(if (todo.done) Icons.Filled.CheckCircle else Icons.Filled.RadioButtonUnchecked,
+                                contentDescription = if (todo.done) "点一下标为未完成" else "点一下标为已完成",
+                                tint = if (todo.done) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.clickable { perform { RecordStore(context).updateTodo(folderUri, todo, !todo.done, todo.text, todo.domain, todo.dueAt) } })
+                            Spacer(Modifier.width(12.dp))
+                            Column {
+                                Text(todo.text, style = MaterialTheme.typography.bodyMedium, textDecoration = if (todo.done) TextDecoration.LineThrough else null)
+                                Text(listOf(todo.domain, todo.dueAt?.replace('T', ' ') ?: "未设置提醒").joinToString(" · "),
+                                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     Column(Modifier.fillMaxSize()) {
         if (operationError.isNotBlank()) Text(operationError, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), color = MaterialTheme.colorScheme.error)
         UnifiedSectionTabs(
@@ -150,54 +178,14 @@ fun TodoListScreen(resumeTick: Int, domainFilter: String? = null) {
                 "$bucket（$count）"
             },
             selectedIndex = selectedBucketIndex,
-            onSelected = { selectedBucket = buckets[it] }
+            onSelected = { selectedBucket = buckets[it] },
+            pagerState = if (domainFilter == null) pagerState else null
         )
 
-        if (visible.isEmpty()) {
-            EmptyHint(if (selectedBucket == "已办") "还没有已办的事项" else "这里还没有待办")
+        if (domainFilter == null) {
+            SectionPager(pagerState, Modifier.weight(1f).fillMaxWidth()) { page -> TodoRows(visibleFor(buckets[page]), buckets[page]) }
         } else {
-            LazyColumn(
-                modifier = Modifier.weight(1f).fillMaxWidth(),
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(visible, key = { it.index }) { todo ->
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { editingTodo = todo },
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                if (todo.done) Icons.Filled.CheckCircle else Icons.Filled.RadioButtonUnchecked,
-                                contentDescription = if (todo.done) "点一下标为未完成" else "点一下标为已完成",
-                                tint = if (todo.done) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                },
-                                modifier = Modifier.clickable {
-                                    perform { RecordStore(context).updateTodo(folderUri, todo, !todo.done, todo.text, todo.domain, todo.dueAt) }
-                                }
-                            )
-                            Spacer(Modifier.width(12.dp))
-                            Column {
-                                Text(todo.text, style = MaterialTheme.typography.bodyMedium,
-                                    textDecoration = if (todo.done) TextDecoration.LineThrough else null)
-                                Text(
-                                    listOf(todo.domain, todo.dueAt?.replace('T', ' ') ?: "未设置提醒").joinToString(" · "),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-                }
-            }
+            Box(Modifier.weight(1f).fillMaxWidth()) { TodoRows(visible, selectedBucket) }
         }
     }
 

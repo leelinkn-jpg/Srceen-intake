@@ -10,6 +10,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.School
 import androidx.compose.material3.Icon
 import androidx.compose.ui.Alignment
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -175,15 +176,10 @@ fun GrowthEffortScreen(resumeTick: Int) {
                 Text("还没有记录", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             items(efforts.take(30), key = { it.id }) { effort ->
-                Card(Modifier.fillMaxWidth().clickable { detail = effort }) {
-                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(effort.activityName, style = MaterialTheme.typography.titleSmall)
-                        Text("${date(effort.startedAt)} · ${MeetingRecord.clock(effort.durationMs)}",
-                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(if (effort.artifacts.isEmpty()) "等待学习文件" else "${effort.artifacts.size} 个学习文件",
-                            style = MaterialTheme.typography.bodySmall)
-                    }
-                }
+                RecordRowCard(Icons.Filled.School, effort.activityName,
+                    "${date(effort.startedAt)} · ${MeetingRecord.clock(effort.durationMs)}",
+                    detail = if (effort.artifacts.isEmpty()) "等待学习文件" else "${effort.artifacts.size} 个学习文件",
+                    onClick = { detail = effort })
             }
         } else if (page == 2) {
             item { GrowthNotesView(folderUri, notesPath, { notesPath = it }, resumeTick) }

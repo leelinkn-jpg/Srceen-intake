@@ -165,23 +165,15 @@ fun MeetingScreen(resumeTick: Int) {
         }
         if (records.isEmpty()) item { Text("还没有会议记录", color = MaterialTheme.colorScheme.onSurfaceVariant) }
         items(records, key = { it.id }) { record ->
-            Card(
-                Modifier
-                    .fillMaxWidth()
-                    .clickable {
-                        renameTarget = record
-                        meetingName = record.name.ifBlank {
-                            MeetingRecord.defaultName(record.createdAt, record.testOnly)
-                        }
-                    }
-            ) {
-                Column(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(0.dp)) {
-                    Text("${record.title} · ${MeetingRecord.clock(record.durationMs)}",
-                        style = MaterialTheme.typography.titleSmall)
-                    Text(record.label, style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    if (record.error.isNotBlank()) Text(record.error, color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall)
+            RecordRowCard(
+                icon = CategoryIcons.iconFor("学习"), title = record.title,
+                subtitle = "${record.label} · ${MeetingRecord.clock(record.durationMs)}",
+                detail = record.error.takeIf { it.isNotBlank() },
+                onClick = {
+                    renameTarget = record
+                    meetingName = record.name.ifBlank { MeetingRecord.defaultName(record.createdAt, record.testOnly) }
+                },
+                footer = {
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         TextButton(onClick = { playback(record) }, enabled = !live.busy && !playbackLoading) {
                             Text(if (playingId == record.id) "停止" else "播放")
@@ -198,7 +190,7 @@ fun MeetingScreen(resumeTick: Int) {
                         TextButton(enabled = !live.busy, onClick = { deleteTarget = record }) { Text("删除") }
                     }
                 }
-            }
+            )
         }
     }
     deleteTarget?.let { record ->

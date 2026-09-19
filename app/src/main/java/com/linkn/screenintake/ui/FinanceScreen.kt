@@ -376,41 +376,15 @@ fun FinanceScreen(resumeTick: Int) {
                             items(rows, key = { it.index }) { row ->
                                 val isExpense = row.type == "支出"
                                 val accent = if (isExpense) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
-                                Card(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable { editingRow = row },
-                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(12.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Icon(CategoryIcons.iconFor(row.category), contentDescription = null, tint = accent)
-                                        Spacer(Modifier.width(12.dp))
-                                        Column(Modifier.weight(1f)) {
-                                            val detail = ExpensePurpose.withoutTag(row.note).ifBlank { row.category }
-                                            Text(
-                                                detail,
-                                                style = MaterialTheme.typography.titleSmall,
-                                                fontWeight = FontWeight.SemiBold
-                                            )
-                                            val purpose = ExpensePurpose.fromNote(row.note)
-                                            val caption = listOfNotNull(purpose, row.category, row.date).joinToString(" · ")
-                                            Text(
-                                                caption,
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                        Text(
-                                            (if (isExpense) "-¥%.2f" else "+¥%.2f").format(row.amount),
-                                            style = MaterialTheme.typography.titleMedium,
-                                            fontWeight = FontWeight.Bold,
-                                            color = accent
-                                        )
-                                    }
-                                }
+                                val detail = ExpensePurpose.withoutTag(row.note).ifBlank { row.category }
+                                val purpose = ExpensePurpose.fromNote(row.note)
+                                val caption = listOfNotNull(purpose, row.category, row.date).joinToString(" · ")
+                                RecordRowCard(
+                                    icon = CategoryIcons.iconFor(row.category), title = detail, subtitle = caption,
+                                    iconTint = accent, onClick = { editingRow = row },
+                                    trailing = { Text((if (isExpense) "-¥%.2f" else "+¥%.2f").format(row.amount),
+                                        style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = accent) }
+                                )
                             }
                         }
                     }
