@@ -1,6 +1,12 @@
 package com.linkn.screenintake.ui
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.tween
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -217,30 +223,42 @@ fun MainScaffold(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            when (secondaryPage) {
-                SecondaryPage.REPORTS -> AiReportCenterScreen(resumeTick = resumeTick)
-                SecondaryPage.PENDING -> PendingScreen(
-                    drafts = pendingDrafts,
-                    notes = pendingNotes,
-                    workChanges = workChanges,
-                    loading = pendingLoading,
-                    onReload = { scope.launch { reloadPending() } }
-                )
-                SecondaryPage.TODOS -> TodoListScreen(resumeTick = resumeTick)
-                SecondaryPage.NOTES -> NoteListScreen(resumeTick = resumeTick)
-                null -> {
-                AnimatedContent(
-                    targetState = currentTab,
-                    modifier = Modifier.fillMaxSize(),
-                    label = "bottom-tab-content"
-                ) { tab ->
-                    when (tab) {
-                        BottomTab.FINANCE -> FinanceScreen(resumeTick)
-                        BottomTab.HEALTH -> HealthScreen(resumeTick)
-                        BottomTab.WORK -> WorkScreen(resumeTick, meetingOpenTick)
-                        BottomTab.HABIT -> GrowthEffortScreen(resumeTick)
+            AnimatedContent(
+                targetState = secondaryPage,
+                modifier = Modifier.fillMaxSize(),
+                transitionSpec = {
+                    (fadeIn(animationSpec = tween(220)) + slideInHorizontally(animationSpec = tween(220)) { it / 12 }) togetherWith
+                        (fadeOut(animationSpec = tween(150)) + slideOutHorizontally(animationSpec = tween(150)) { -it / 16 })
+                },
+                label = "secondary-page-content"
+            ) { page ->
+                when (page) {
+                    SecondaryPage.REPORTS -> AiReportCenterScreen(resumeTick = resumeTick)
+                    SecondaryPage.PENDING -> PendingScreen(
+                        drafts = pendingDrafts,
+                        notes = pendingNotes,
+                        workChanges = workChanges,
+                        loading = pendingLoading,
+                        onReload = { scope.launch { reloadPending() } }
+                    )
+                    SecondaryPage.TODOS -> TodoListScreen(resumeTick = resumeTick)
+                    SecondaryPage.NOTES -> NoteListScreen(resumeTick = resumeTick)
+                    null -> AnimatedContent(
+                        targetState = currentTab,
+                        modifier = Modifier.fillMaxSize(),
+                        transitionSpec = {
+                            (fadeIn(animationSpec = tween(180)) + slideInHorizontally(animationSpec = tween(180)) { it / 16 }) togetherWith
+                                (fadeOut(animationSpec = tween(120)) + slideOutHorizontally(animationSpec = tween(120)) { -it / 20 })
+                        },
+                        label = "bottom-tab-content"
+                    ) { tab ->
+                        when (tab) {
+                            BottomTab.FINANCE -> FinanceScreen(resumeTick)
+                            BottomTab.HEALTH -> HealthScreen(resumeTick)
+                            BottomTab.WORK -> WorkScreen(resumeTick, meetingOpenTick)
+                            BottomTab.HABIT -> GrowthEffortScreen(resumeTick)
+                        }
                     }
-                }
                 }
             }
         }

@@ -135,7 +135,14 @@ fun GrowthEffortScreen(resumeTick: Int) {
         )
         if (error.isNotBlank()) Text(error, modifier = Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error)
         SectionPager(pagerState, Modifier.weight(1f).fillMaxWidth()) { page ->
-            LazyColumn(contentPadding = RecordListContentPadding, verticalArrangement = Arrangement.spacedBy(RecordListSpacing)) {
+            // HorizontalPager vertically centers a child that wraps its content.
+            // Claim the page height so a short project list always begins under
+            // the secondary navigation, just like reports and records do.
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = RecordListContentPadding,
+                verticalArrangement = Arrangement.spacedBy(RecordListSpacing)
+            ) {
 
         if (page == 0) {
             active?.let { running -> item {
