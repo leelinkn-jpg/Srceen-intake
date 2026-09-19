@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -52,7 +51,6 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -75,7 +73,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.lerp
 import androidx.compose.ui.window.Dialog
 import com.linkn.screenintake.ScreenIntakeApp
 import com.linkn.screenintake.classify.Categories
@@ -126,29 +123,7 @@ internal fun UnifiedSectionTabs(
     ScrollableTabRow(
         selectedTabIndex = selectedIndex,
         modifier = Modifier.fillMaxWidth(),
-        edgePadding = 0.dp,
-        indicator = { positions ->
-            val state = pagerState
-            if (positions.isNotEmpty()) {
-                val from = (state?.currentPage ?: selectedIndex).coerceIn(0, positions.lastIndex)
-                val to = (from + if ((state?.currentPageOffsetFraction ?: 0f) > 0f) 1 else -1).coerceIn(0, positions.lastIndex)
-                val progress = kotlin.math.abs(state?.currentPageOffsetFraction ?: 0f).coerceIn(0f, 1f)
-                val left = lerp(positions[from].left, positions[to].left, progress)
-                val width = lerp(positions[from].width, positions[to].width, progress)
-                // SecondaryIndicator internally requests fillMaxWidth, which conflicts with
-                // an interpolated tab width and can turn the indicator into a large block.
-                // Keep a full-width track, then draw only the moving 3dp line inside it.
-                Box(Modifier.fillMaxWidth().height(3.dp)) {
-                    Box(
-                        Modifier
-                            .offset(x = left)
-                            .width(width)
-                            .fillMaxSize()
-                            .background(MaterialTheme.colorScheme.primary)
-                    )
-                }
-            }
-        }
+        edgePadding = 0.dp
     ) {
         labels.forEachIndexed { index, label ->
             Tab(
