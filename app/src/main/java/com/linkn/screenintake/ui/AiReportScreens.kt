@@ -93,19 +93,18 @@ fun AiReportCenterScreen(resumeTick: Int) {
     fun selectPeriod(index: Int) {
         period = if (index == 0) null else ReportPeriod.entries[index - 1]
     }
+    val pagerState = rememberSyncedSectionPagerState(selectedIndex, tabLabels.size, ::selectPeriod)
 
     Column(Modifier.fillMaxSize()) {
-        UnifiedSectionTabs(tabLabels, selectedIndex, ::selectPeriod)
-        Box(
-            Modifier
-                .fillMaxSize()
-                .sectionSwipes(selectedIndex, tabLabels.size, ::selectPeriod)
-        ) {
-            if (shown.isEmpty()) {
-                EmptyHint("还没有 Mini 回传的${period?.label ?: "报告"}")
+        UnifiedSectionTabs(tabLabels, selectedIndex, ::selectPeriod, pagerState)
+        SectionPager(pagerState, Modifier.fillMaxSize()) { page ->
+            val pagePeriod = if (page == 0) null else ReportPeriod.entries[page - 1]
+            val pageReports = reports.filter { pagePeriod == null || it.period == pagePeriod }
+            if (pageReports.isEmpty()) {
+                EmptyHint("还没有 Mini 回传的${pagePeriod?.label ?: "报告"}")
             } else {
                 LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(shown, key = { "${it.id}:${it.revision}" }) { item ->
+                    items(pageReports, key = { "${it.id}:${it.revision}" }) { item ->
                         Card(Modifier.fillMaxWidth().clickable { detail = item; repo.markRead(item); ReportChangeSignal.bump() }) {
                             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {

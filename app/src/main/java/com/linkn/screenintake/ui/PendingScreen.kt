@@ -581,32 +581,18 @@ fun InboxScreen(
         mutableStateOf(if (initialDomain != null) InboxSubTab.TODO else InboxSubTab.PENDING)
     }
     var domainFilter by remember(initialDomain, pendingOpenTick) { mutableStateOf(initialDomain) }
+    val pagerState = rememberSyncedSectionPagerState(subTab.ordinal, InboxSubTab.entries.size) { subTab = InboxSubTab.entries[it] }
 
     Column(modifier = Modifier.fillMaxSize()) {
         UnifiedSectionTabs(
             labels = listOf("待确认（${drafts.size + notes.size}）", "全部待办", "全部灵感"),
             selectedIndex = subTab.ordinal,
-            onSelected = { subTab = InboxSubTab.entries[it] }
+            onSelected = { subTab = InboxSubTab.entries[it] },
+            pagerState = pagerState
         )
 
-        if (subTab == InboxSubTab.NOTE) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                FilterChip(selected = domainFilter == null, onClick = { domainFilter = null }, label = { Text("全部") })
-                ClassifyResult.DOMAINS.forEach { d ->
-                    FilterChip(selected = domainFilter == d, onClick = { domainFilter = d }, label = { Text(d) })
-                }
-            }
-            Spacer(modifier = Modifier.height(4.dp))
-        }
-
-        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            when (subTab) {
+        SectionPager(pagerState, Modifier.weight(1f).fillMaxWidth()) { page ->
+            when (InboxSubTab.entries[page]) {
                 InboxSubTab.PENDING -> PendingScreen(
                     drafts = drafts,
                     notes = notes,
@@ -614,7 +600,19 @@ fun InboxScreen(
                     onReload = onReload
                 )
                 InboxSubTab.TODO -> TodoListScreen(resumeTick = resumeTick, domainFilter = null)
-                InboxSubTab.NOTE -> NoteListScreen(resumeTick = resumeTick, domainFilter = domainFilter)
+                InboxSubTab.NOTE -> Column(Modifier.fillMaxSize()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        FilterChip(selected = domainFilter == null, onClick = { domainFilter = null }, label = { Text("全部") })
+                        ClassifyResult.DOMAINS.forEach { d ->
+                            FilterChip(selected = domainFilter == d, onClick = { domainFilter = d }, label = { Text(d) })
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    NoteListScreen(resumeTick = resumeTick, domainFilter = domainFilter)
+                }
             }
         }
     }

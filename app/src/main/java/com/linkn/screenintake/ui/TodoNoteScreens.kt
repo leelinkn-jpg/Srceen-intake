@@ -128,21 +128,16 @@ fun TodoListScreen(resumeTick: Int, domainFilter: String? = null) {
     }
 
     val scoped = if (domainFilter == null) todos else todos.filter { it.domain == domainFilter }
-    val visible = remember(scoped, selectedBucket, domainFilter) {
-        if (domainFilter == null) when (selectedBucket) {
+    fun visibleFor(bucket: String) = if (domainFilter == null) when (bucket) {
             "工作" -> scoped.filter { !it.done && it.domain == "工作" }
             "其他" -> scoped.filter { !it.done && it.domain != "工作" }
             else -> scoped.filter { it.done }
-        } else if (selectedBucket == "已办") scoped.filter { it.done } else scoped.filter { !it.done }
-    }
+        } else if (bucket == "已办") scoped.filter { it.done } else scoped.filter { !it.done }
 
     val buckets = if (domainFilter == null) listOf("工作", "其他", "已办") else listOf("待办", "已办")
     val selectedBucketIndex = buckets.indexOf(selectedBucket).coerceAtLeast(0)
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .sectionSwipes(selectedBucketIndex, buckets.size) { selectedBucket = buckets[it] }
-    ) {
+    val pagerState = rememberSyncedSectionPagerState(selectedBucketIndex, buckets.size) { selectedBucket = buckets[it] }
+    Column(Modifier.fillMaxSize()) {
         if (operationError.isNotBlank()) Text(operationError, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), color = MaterialTheme.colorScheme.error)
         UnifiedSectionTabs(
             labels = buckets.map { bucket ->
@@ -155,12 +150,16 @@ fun TodoListScreen(resumeTick: Int, domainFilter: String? = null) {
                 "$bucket（$count）"
             },
             selectedIndex = selectedBucketIndex,
-            onSelected = { selectedBucket = buckets[it] }
+            onSelected = { selectedBucket = buckets[it] },
+            pagerState = pagerState
         )
 
-        if (visible.isEmpty()) {
-            EmptyHint(if (selectedBucket == "已办") "还没有已办的事项" else "这里还没有待办")
-        } else {
+        SectionPager(pagerState, Modifier.weight(1f).fillMaxWidth()) { page ->
+            val bucket = buckets[page]
+            val visible = visibleFor(bucket)
+            if (visible.isEmpty()) {
+                EmptyHint(if (bucket == "已办") "还没有已办的事项" else "这里还没有待办")
+            } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(16.dp),
@@ -202,6 +201,7 @@ fun TodoListScreen(resumeTick: Int, domainFilter: String? = null) {
                         }
                     }
                 }
+            }
             }
         }
     }
@@ -318,17 +318,25 @@ fun NoteListScreen(resumeTick: Int, domainFilter: String? = null) {
     LaunchedEffect(resumeTick, noteChangeTick) { reload() }
 
     var selectedDomain by remember(domainFilter) { mutableStateOf(if (domainFilter == null) "工作" else domainFilter) }
-    val scoped = if (domainFilter == null) {
-        notes.filter { if (selectedDomain == "工作") it.domain == "工作" else it.domain != "工作" }
-    } else notes.filter { it.domain == domainFilter }
+    fun notesFor(domain: String) = notes.filter { if (domain == "工作") it.domain == "工作" else it.domain != "工作" }
+    @Composable fun NoteRows(rows: List<NoteItem>, label: String) {
+        if (rows.isEmpty()) EmptyHint("还没有${label}灵感")
+        else LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(rows, key = { it.index }) { note ->
+                Card(Modifier.fillMaxWidth().clickable { editingNote = note }, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text(note.heading, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (note.content.isNotBlank()) { Spacer(Modifier.height(4.dp)); Text(note.content, style = MaterialTheme.typography.bodyMedium) }
+                    }
+                }
+            }
+        }
+    }
+    val domains = listOf("工作", "其他")
+    val pagerState = rememberSyncedSectionPagerState(if (selectedDomain == "工作") 0 else 1, 2) { selectedDomain = domains[it] }
 
-    Column(Modifier.fillMaxSize().then(
-        if (domainFilter == null) Modifier.sectionSwipes(if (selectedDomain == "工作") 0 else 1, 2) {
-            selectedDomain = if (it == 0) "工作" else "其他"
-        } else Modifier
-    )) {
+    Column(Modifier.fillMaxSize()) {
         if (domainFilter == null) {
-            val domains = listOf("工作", "其他")
             UnifiedSectionTabs(
                 labels = domains.map { value ->
                     val count = if (value == "工作") {
@@ -339,39 +347,14 @@ fun NoteListScreen(resumeTick: Int, domainFilter: String? = null) {
                     "$value（$count）"
                 },
                 selectedIndex = if (selectedDomain == "工作") 0 else 1,
-                onSelected = { selectedDomain = domains[it] }
+                onSelected = { selectedDomain = domains[it] },
+                pagerState = pagerState
             )
-        }
-        if (scoped.isEmpty()) {
-            EmptyHint("还没有${selectedDomain ?: ""}灵感")
         } else {
-        LazyColumn(
-            modifier = Modifier.weight(1f),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            items(scoped, key = { it.index }) { note ->
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { editingNote = note },
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                ) {
-                    Column(Modifier.padding(12.dp)) {
-                        Text(
-                            note.heading,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        if (note.content.isNotBlank()) {
-                            Spacer(Modifier.height(4.dp))
-                            Text(note.content, style = MaterialTheme.typography.bodyMedium)
-                        }
-                    }
-                }
-            }
+            NoteRows(notes.filter { it.domain == domainFilter }, domainFilter.orEmpty())
+            return@Column
         }
-        }
+        SectionPager(pagerState, Modifier.weight(1f).fillMaxWidth()) { page -> NoteRows(notesFor(domains[page]), domains[page]) }
     }
 
     editingNote?.let { note ->

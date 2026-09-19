@@ -1,10 +1,9 @@
 package com.linkn.screenintake.ui
 
 import android.graphics.Bitmap
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.ui.composed
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -21,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -52,6 +52,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -60,6 +61,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -73,6 +75,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.lerp
 import androidx.compose.ui.window.Dialog
 import com.linkn.screenintake.ScreenIntakeApp
 import com.linkn.screenintake.classify.Categories
@@ -94,6 +97,7 @@ import com.linkn.screenintake.store.WeightRow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.collectLatest
 
 /**
  * 各 Tab 共用的极简空状态占位。单独拆成一个文件是因为 Kotlin 顶层 `private` 只在
@@ -116,12 +120,24 @@ internal fun EmptyHint(text: String) {
 internal fun UnifiedSectionTabs(
     labels: List<String>,
     selectedIndex: Int,
-    onSelected: (Int) -> Unit
+    onSelected: (Int) -> Unit,
+    pagerState: PagerState? = null
 ) {
     ScrollableTabRow(
         selectedTabIndex = selectedIndex,
         modifier = Modifier.fillMaxWidth(),
-        edgePadding = 0.dp
+        edgePadding = 0.dp,
+        indicator = { positions ->
+            val state = pagerState
+            if (positions.isNotEmpty()) {
+                val from = (state?.currentPage ?: selectedIndex).coerceIn(0, positions.lastIndex)
+                val to = (from + if ((state?.currentPageOffsetFraction ?: 0f) > 0f) 1 else -1).coerceIn(0, positions.lastIndex)
+                val progress = kotlin.math.abs(state?.currentPageOffsetFraction ?: 0f).coerceIn(0f, 1f)
+                val left = lerp(positions[from].left, positions[to].left, progress)
+                val width = lerp(positions[from].width, positions[to].width, progress)
+                TabRowDefaults.SecondaryIndicator(Modifier.offset(x = left).width(width))
+            }
+        }
     ) {
         labels.forEachIndexed { index, label ->
             Tab(
@@ -133,38 +149,36 @@ internal fun UnifiedSectionTabs(
     }
 }
 
-/** Horizontal content swipes change one section; edge gestures remain available to Android. */
-internal fun Modifier.sectionSwipes(index: Int, count: Int, select: (Int) -> Unit): Modifier = composed {
-    val currentIndex by rememberUpdatedState(index)
-    val onSelect by rememberUpdatedState(select)
-    val density = LocalDensity.current
-    val threshold = with(density) { 64.dp.toPx() }
-    val edge = with(density) { 32.dp.toPx() }
-    pointerInput(count, threshold, edge) {
-        var distance = 0f
-        var allowed = false
-        detectHorizontalDragGestures(
-            onDragStart = { position ->
-                distance = 0f
-                allowed = position.x > edge && position.x < size.width - edge
-            },
-            onHorizontalDrag = { change, amount ->
-                // The detector consumes the slop-crossing event before this callback.
-                // Checking isConsumed here would cancel every gesture immediately.
-                // Its cancellation protocol already arbitrates nested drag detectors.
-                if (allowed) {
-                    change.consume()
-                    distance += amount
-                }
-            },
-            onDragCancel = { distance = 0f },
-            onDragEnd = {
-                if (allowed && kotlin.math.abs(distance) >= threshold) {
-                    val next = (currentIndex + if (distance < 0) 1 else -1).coerceIn(0, count - 1)
-                    if (next != currentIndex) onSelect(next)
-                }
-                distance = 0f
-            }
-        )
+/**
+ * A real pager instead of a "gesture ends -> switch page" shortcut. The page and the
+ * tab indicator now travel with the finger; only a settled page changes the caller's state.
+ */
+@Composable
+internal fun rememberSyncedSectionPagerState(
+    selectedIndex: Int,
+    pageCount: Int,
+    onSelected: (Int) -> Unit
+): PagerState {
+    val state = rememberPagerState(initialPage = selectedIndex, pageCount = { pageCount })
+    val latestSelect by rememberUpdatedState(onSelected)
+    LaunchedEffect(selectedIndex, pageCount) {
+        if (selectedIndex in 0 until pageCount && state.currentPage != selectedIndex) {
+            state.animateScrollToPage(selectedIndex)
+        }
     }
+    LaunchedEffect(state) {
+        snapshotFlow { state.settledPage }.collectLatest { page ->
+            if (page in 0 until pageCount) latestSelect(page)
+        }
+    }
+    return state
+}
+
+@Composable
+internal fun SectionPager(
+    state: PagerState,
+    modifier: Modifier = Modifier,
+    content: @Composable (Int) -> Unit
+) {
+    HorizontalPager(state = state, modifier = modifier, beyondViewportPageCount = 1) { page -> content(page) }
 }

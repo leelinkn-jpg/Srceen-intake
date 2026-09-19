@@ -85,6 +85,7 @@ fun GrowthEffortScreen(resumeTick: Int) {
     var importTarget by remember { mutableStateOf<GrowthEffort?>(null) }
     var deleteTarget by remember { mutableStateOf<GrowthEffort?>(null) }
     var selectedSection by rememberSaveable { mutableStateOf(0) }
+    val pagerState = rememberSyncedSectionPagerState(selectedSection, 4) { selectedSection = it }
     var notesPath by rememberSaveable(folderUri) { mutableStateOf("") }
     BackHandler(enabled = selectedSection == 2 && notesPath.isNotBlank()) {
         notesPath = notesPath.substringBeforeLast('/', "")
@@ -124,18 +125,18 @@ fun GrowthEffortScreen(resumeTick: Int) {
             .onFailure { error = it.message ?: "无法开始记录" }
     }
 
-    LazyColumn(Modifier.fillMaxSize().sectionSwipes(selectedSection, 4) { selectedSection = it }, contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item {
-            UnifiedSectionTabs(
-                labels = listOf("我的项目", "最近记录", "笔记", "建议"),
-                selectedIndex = selectedSection,
-                onSelected = { selectedSection = it }
-            )
-            if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error)
-        }
+    Column(Modifier.fillMaxSize()) {
+        UnifiedSectionTabs(
+            labels = listOf("我的项目", "最近记录", "笔记", "建议"),
+            selectedIndex = selectedSection,
+            onSelected = { selectedSection = it },
+            pagerState = pagerState
+        )
+        if (error.isNotBlank()) Text(error, modifier = Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.error)
+        SectionPager(pagerState, Modifier.weight(1f).fillMaxWidth()) { page ->
+            LazyColumn(contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
 
-        if (selectedSection == 0) {
+        if (page == 0) {
             active?.let { running -> item {
                 Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("正在进行 · ${running.activityName}", style = MaterialTheme.typography.titleMedium)
@@ -169,7 +170,7 @@ fun GrowthEffortScreen(resumeTick: Int) {
                     }
                 }
             }
-        } else if (selectedSection == 1) {
+        } else if (page == 1) {
             if (efforts.isEmpty()) item {
                 Text("还没有记录", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -184,10 +185,12 @@ fun GrowthEffortScreen(resumeTick: Int) {
                     }
                 }
             }
-        } else if (selectedSection == 2) {
+        } else if (page == 2) {
             item { GrowthNotesView(folderUri, notesPath, { notesPath = it }, resumeTick) }
         } else {
             item { DomainAdvicePanel(ReportDomain.GROWTH, resumeTick) }
+        }
+            }
         }
     }
 

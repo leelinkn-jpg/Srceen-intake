@@ -144,6 +144,7 @@ fun HealthScreen(resumeTick: Int) {
     LaunchedEffect(resumeTick, changeTick) { reload() }
 
     val latestWeight = weights.lastOrNull()
+    val pagerState = rememberSyncedSectionPagerState(tab.ordinal, HealthTab.entries.size) { tab = HealthTab.entries[it] }
     // 恢复评分/睡眠不一定每天都有（脚本抓不到就留空，或者 Whoop 还没同步过来），从最后
     // 往前找第一条真的有值的，不直接拿最后一行——不然万一最后一天缺了这几项，总览卡片
     // 就会显示"--"，看着像坏了。
@@ -216,11 +217,12 @@ fun HealthScreen(resumeTick: Int) {
         UnifiedSectionTabs(
             labels = listOf("饮食", "饮料", "酒精", "体重", "运动", "数字健康", "建议"),
             selectedIndex = tab.ordinal,
-            onSelected = { tab = HealthTab.entries[it] }
+            onSelected = { tab = HealthTab.entries[it] },
+            pagerState = pagerState
         )
 
-        Box(modifier = Modifier.weight(1f).fillMaxWidth().sectionSwipes(tab.ordinal, HealthTab.entries.size) { tab = HealthTab.entries[it] }) {
-            when (tab) {
+        SectionPager(pagerState, Modifier.weight(1f).fillMaxWidth()) { page ->
+            when (HealthTab.entries[page]) {
                 HealthTab.MEAL -> PhotoGalleryView(category = "meal", folderUri = folderUri)
                 HealthTab.DRINK -> PhotoGalleryView(category = "drink", folderUri = folderUri)
                 HealthTab.ALCOHOL -> AlcoholView(folderUri)

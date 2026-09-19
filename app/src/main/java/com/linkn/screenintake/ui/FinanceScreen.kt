@@ -206,6 +206,7 @@ fun FinanceScreen(resumeTick: Int) {
     val cashNet = cards.sumOf { c -> if (c.type == "信用") -c.balance else c.balance }
     val holdingsValue = holdings.sumOf { h -> (prices[keyOf(h)] ?: h.avgCost) * h.shares }
     val totalAssets = cashNet + holdingsValue
+    val pagerState = rememberSyncedSectionPagerState(tab.ordinal, FinanceTab.entries.size) { tab = FinanceTab.entries[it] }
 
     Column(Modifier.fillMaxSize()) {
         if (!folderAccessible) {
@@ -297,11 +298,12 @@ fun FinanceScreen(resumeTick: Int) {
         UnifiedSectionTabs(
             labels = listOf("收支", "持仓", "卡片", "建议"),
             selectedIndex = tab.ordinal,
-            onSelected = { tab = FinanceTab.entries[it] }
+            onSelected = { tab = FinanceTab.entries[it] },
+            pagerState = pagerState
         )
 
-        Box(modifier = Modifier.weight(1f).fillMaxWidth().sectionSwipes(tab.ordinal, FinanceTab.entries.size) { tab = FinanceTab.entries[it] }) {
-            when (tab) {
+        SectionPager(pagerState, Modifier.weight(1f).fillMaxWidth()) { page ->
+            when (FinanceTab.entries[page]) {
                 FinanceTab.HOLDINGS -> HoldingsView(
                     holdings = holdings,
                     prices = prices,

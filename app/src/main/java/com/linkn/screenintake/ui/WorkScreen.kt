@@ -103,6 +103,7 @@ private enum class WorkTab { MEETING, TODO, NOTE, CAPACITY, OVERDUE, RESERVE, VI
 @Composable
 fun WorkScreen(resumeTick: Int, meetingOpenTick: Int = 0) {
     var tab by remember(meetingOpenTick) { mutableStateOf(WorkTab.MEETING) }
+    val pagerState = rememberSyncedSectionPagerState(tab.ordinal, WorkTab.entries.size) { tab = WorkTab.entries[it] }
 
     Column(Modifier.fillMaxSize()) {
         WeeklyMeetingPlanCard(resumeTick)
@@ -110,11 +111,12 @@ fun WorkScreen(resumeTick: Int, meetingOpenTick: Int = 0) {
         UnifiedSectionTabs(
             labels = listOf("会议", "待办", "灵感", "厂配容", "逾期", "储备", "走访", "投放", "建议"),
             selectedIndex = tab.ordinal,
-            onSelected = { tab = WorkTab.entries[it] }
+            onSelected = { tab = WorkTab.entries[it] },
+            pagerState = pagerState
         )
 
-        Box(modifier = Modifier.weight(1f).fillMaxWidth().sectionSwipes(tab.ordinal, WorkTab.entries.size) { tab = WorkTab.entries[it] }) {
-            when (tab) {
+        SectionPager(pagerState, Modifier.weight(1f).fillMaxWidth()) { page ->
+            when (WorkTab.entries[page]) {
                 WorkTab.MEETING -> MeetingScreen(resumeTick)
                 WorkTab.TODO -> TodoListScreen(resumeTick = resumeTick, domainFilter = "工作")
                 WorkTab.NOTE -> NoteListScreen(resumeTick = resumeTick, domainFilter = "工作")
