@@ -1,6 +1,7 @@
 package com.linkn.screenintake.ui
 
 import android.graphics.Bitmap
+import android.widget.Toast
 import android.util.LruCache
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
@@ -387,8 +388,20 @@ private fun DigitalHealthView(rows: List<DigitalHealthRow>, folderUri: String) {
                         Text("${candidate.date} · ${candidate.appName} ${candidate.minutes} 分钟", style = MaterialTheme.typography.titleSmall)
                         Text("建议关联：${candidate.suggestedActivity.ifBlank { "成长项目" }}", style = MaterialTheme.typography.bodySmall)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                            TextButton(onClick = { scope.launch(Dispatchers.IO) { repo.respondGrowthUsage(folderUri, candidate.id, false); reloadCandidates() } }) { Text("不计入") }
-                            Button(onClick = { scope.launch(Dispatchers.IO) { repo.respondGrowthUsage(folderUri, candidate.id, true); reloadCandidates() } }) { Text("确认关联") }
+                            TextButton(onClick = {
+                                scope.launch {
+                                    runCatching { withContext(Dispatchers.IO) { repo.respondGrowthUsage(folderUri, candidate.id, false) } }
+                                        .onSuccess { reloadCandidates() }
+                                        .onFailure { Toast.makeText(context, it.message ?: "保存失败", Toast.LENGTH_LONG).show() }
+                                }
+                            }) { Text("不计入") }
+                            Button(onClick = {
+                                scope.launch {
+                                    runCatching { withContext(Dispatchers.IO) { repo.respondGrowthUsage(folderUri, candidate.id, true) } }
+                                        .onSuccess { reloadCandidates() }
+                                        .onFailure { Toast.makeText(context, it.message ?: "保存失败", Toast.LENGTH_LONG).show() }
+                                }
+                            }) { Text("确认关联") }
                         }
                     }
                 }
@@ -449,7 +462,13 @@ private fun AlcoholView(folderUri: String) {
                 Text(candidate.summary.ifBlank { "识别到可能饮酒" }, style = MaterialTheme.typography.titleSmall)
                 Text("请补充酒类、饮用量与开始/结束时间后确认。", style = MaterialTheme.typography.bodySmall)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = { scope.launch(Dispatchers.IO) { repo.rejectAlcoholCandidate(folderUri, candidate.id); reload() } }) { Text("不是饮酒") }
+                    TextButton(onClick = {
+                    scope.launch {
+                        runCatching { withContext(Dispatchers.IO) { repo.rejectAlcoholCandidate(folderUri, candidate.id) } }
+                            .onSuccess { reload() }
+                            .onFailure { Toast.makeText(context, it.message ?: "保存失败", Toast.LENGTH_LONG).show() }
+                    }
+                }) { Text("不是饮酒") }
                     Button(onClick = { editing = candidate }) { Text("确认并补充") }
                 }
             }
@@ -462,8 +481,21 @@ private fun AlcoholView(folderUri: String) {
         } } }
     }
     if (manual || editing != null) AlcoholEditDialog(editing, onDismiss = { manual = false; editing = null }, onSave = { drinks, start, end ->
-        scope.launch(Dispatchers.IO) { if (editing == null) repo.addAlcohol(folderUri, drinks, start, end) else repo.confirmAlcoholCandidate(folderUri, editing!!, drinks, start, end); reload() }
-        manual = false; editing = null
+        val candidate = editing
+        scope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    if (candidate == null) repo.addAlcohol(folderUri, drinks, start, end)
+                    else repo.confirmAlcoholCandidate(folderUri, candidate, drinks, start, end)
+                }
+            }.onSuccess {
+                manual = false
+                editing = null
+                reload()
+            }.onFailure {
+                Toast.makeText(context, it.message ?: "保存失败", Toast.LENGTH_LONG).show()
+            }
+        }
     })
 }
 
@@ -582,16 +614,24 @@ private fun PhotoGalleryView(category: String, folderUri: String) {
                 photo = photo,
                 folderUri = folderUri,
                 onMove = {
-                    scope.launch(Dispatchers.IO) {
-                        val target = if (photo.category == "drink") "meal" else "drink"
-                        RecordStore(context).movePhoto(folderUri, photo.fileName, photo.category, target)
-                        reload()
+                    scope.launch {
+                        runCatching {
+                            withContext(Dispatchers.IO) {
+                                val target = if (photo.category == "drink") "meal" else "drink"
+                                RecordStore(context).movePhoto(folderUri, photo.fileName, photo.category, target)
+                            }
+                        }.onSuccess { reload() }
+                            .onFailure { Toast.makeText(context, it.message ?: "保存失败", Toast.LENGTH_LONG).show() }
                     }
                 },
                 onDelete = {
-                    scope.launch(Dispatchers.IO) {
-                        RecordStore(context).deletePhoto(folderUri, photo.fileName, photo.category)
-                        reload()
+                    scope.launch {
+                        runCatching {
+                            withContext(Dispatchers.IO) {
+                                RecordStore(context).deletePhoto(folderUri, photo.fileName, photo.category)
+                            }
+                        }.onSuccess { reload() }
+                            .onFailure { Toast.makeText(context, it.message ?: "保存失败", Toast.LENGTH_LONG).show() }
                     }
                 }
             )
