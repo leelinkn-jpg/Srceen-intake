@@ -1,0 +1,54 @@
+appId: com.linkn.screenintake
+name: write-persist
+---
+- launchApp
+- waitForAnimationToEnd:
+    timeout: 8000
+- runFlow:
+    when:
+      visible: "欢迎使用「秒记」"
+    commands:
+      - scrollUntilVisible:
+          element: "我已了解，进入应用"
+          direction: DOWN
+          timeout: 20000
+      - tapOn: "我已了解，进入应用"
+      - waitForAnimationToEnd:
+          timeout: 5000
+- tapOn: "财务"
+- waitForAnimationToEnd:
+    timeout: 3000
+- tapOn: "卡片"
+- tapOn: "添加一张卡"
+- tapOn: "卡名称"
+- inputText: "Maestro测卡"
+- hideKeyboard
+- tapOn:
+    text: "^添加$"
+- extendedWaitUntil:
+    visible: "Maestro测卡"
+    timeout: 8000
+- tapOn: "Maestro测卡"
+- tapOn:
+    text: "^删除$"
+- extendedWaitUntil:
+    notVisible: "Maestro测卡"
+    timeout: 8000
+- tapOn: "成长"
+- waitForAnimationToEnd:
+    timeout: 3000
+- tapOn: "我的项目"
+- tapOn: "＋ 新增项目"
+- tapOn: "项目名称"
+- inputText: "Maestro测项"
+- hideKeyboard
+- tapOn:
+    text: "^保存$"
+- extendedWaitUntil:
+    visible: "Maestro测项"
+    timeout: 8000
+- tapOn: "Maestro测项"
+- tapOn: "归档项目"
+- extendedWaitUntil:
+    notVisible: "Maestro测项"
+    timeout: 8000
