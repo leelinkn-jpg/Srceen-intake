@@ -70,7 +70,9 @@ class MeetingRecorderService : Service() {
                     startForeground(NOTIFICATION_ID, notification("准备中…"),
                         if (microphoneMode) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
                 } catch (e: Exception) {
-                    mutableState.value = MeetingLiveState(message = "启动失败，请回到会议记录页面并允许麦克风权限")
+                    val reason = e.message?.takeIf { it.isNotBlank() }
+                        ?: "无法启动录音服务，请检查麦克风和通知权限"
+                    mutableState.value = MeetingLiveState(message = reason)
                     working = false; stopSelf(); return START_NOT_STICKY
                 }
                 val action = intent.action
