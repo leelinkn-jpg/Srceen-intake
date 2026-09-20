@@ -118,10 +118,13 @@ fun TodoListScreen(resumeTick: Int, domainFilter: String? = null) {
     val todoChangeTick = DataChangeSignal.forDomain("工作").value
     LaunchedEffect(resumeTick, todoChangeTick) { reload() }
 
-    fun perform(action: suspend () -> Unit) {
+    fun perform(close: (() -> Unit)? = null, action: suspend () -> Unit) {
         scope.launch {
             runCatching { withContext(Dispatchers.IO) { action() } }
-                .onSuccess { reload() }
+                .onSuccess {
+                    close?.invoke()
+                    reload()
+                }
                 .onFailure { error ->
                     operationError = error.message ?: "操作失败，原记录未修改"
                     Toast.makeText(context, operationError, Toast.LENGTH_LONG).show()
@@ -202,8 +205,9 @@ fun TodoListScreen(resumeTick: Int, domainFilter: String? = null) {
             defaultDomain = domainFilter ?: "工作",
             onDismiss = { creatingTodo = false },
             onCreate = { text, domain, dueAt ->
-                creatingTodo = false
-                perform { RecordStore(context).addManualTodo(folderUri, text, domain, dueAt) }
+                perform({ creatingTodo = false }) {
+                    RecordStore(context).addManualTodo(folderUri, text, domain, dueAt)
+                }
             }
         )
     }
@@ -213,12 +217,14 @@ fun TodoListScreen(resumeTick: Int, domainFilter: String? = null) {
             todo = todo,
             onDismiss = { editingTodo = null },
             onSave = { newText, newDone, newDomain, dueAt ->
-                editingTodo = null
-                perform { RecordStore(context).updateTodo(folderUri, todo, newDone, newText, newDomain, dueAt) }
+                perform({ editingTodo = null }) {
+                    RecordStore(context).updateTodo(folderUri, todo, newDone, newText, newDomain, dueAt)
+                }
             },
             onDelete = {
-                editingTodo = null
-                perform { RecordStore(context).deleteTodo(folderUri, todo) }
+                perform({ editingTodo = null }) {
+                    RecordStore(context).deleteTodo(folderUri, todo)
+                }
             }
         )
     }
