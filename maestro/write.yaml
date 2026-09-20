@@ -21,18 +21,21 @@ name: write-persist
 - tapOn: "卡片"
 - tapOn: "添加一张卡"
 - tapOn: "卡名称"
-- inputText: "Maestro测卡"
+- eraseText
+- inputText: "MaestroCard"
 - hideKeyboard
 - tapOn:
     text: "^添加$"
+- waitForAnimationToEnd:
+    timeout: 3000
 - extendedWaitUntil:
-    visible: "Maestro测卡"
-    timeout: 8000
-- tapOn: "Maestro测卡"
+    visible: "MaestroCard"
+    timeout: 10000
+- tapOn: "MaestroCard"
 - tapOn:
     text: "^删除$"
 - extendedWaitUntil:
-    notVisible: "Maestro测卡"
+    notVisible: "MaestroCard"
     timeout: 8000
 - tapOn: "成长"
 - waitForAnimationToEnd:
@@ -40,15 +43,16 @@ name: write-persist
 - tapOn: "我的项目"
 - tapOn: "＋ 新增项目"
 - tapOn: "项目名称"
-- inputText: "Maestro测项"
+- eraseText
+- inputText: "MaestroItem"
 - hideKeyboard
 - tapOn:
     text: "^保存$"
 - extendedWaitUntil:
-    visible: "Maestro测项"
+    visible: "MaestroItem"
     timeout: 8000
-- tapOn: "Maestro测项"
+- tapOn: "MaestroItem"
 - tapOn: "归档项目"
 - extendedWaitUntil:
-    notVisible: "Maestro测项"
+    notVisible: "MaestroItem"
     timeout: 8000
