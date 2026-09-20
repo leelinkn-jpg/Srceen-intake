@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.core.content.ContextCompat
 import com.linkn.screenintake.ScreenIntakeApp
+import com.linkn.screenintake.capture.ScreenIntakeAccessibilityService
 import com.linkn.screenintake.meeting.MeetingRecord
 import com.linkn.screenintake.meeting.MeetingRecorderService
 import com.linkn.screenintake.meeting.MeetingRepository
@@ -96,6 +97,14 @@ fun MeetingScreen(resumeTick: Int) {
         if (granted) start() else error = "需要允许麦克风权限才能录音"
     }
     fun requestStart() {
+        if (folder.isBlank()) {
+            error = "请先在设置中选择保存文件夹"
+            return
+        }
+        if (!ScreenIntakeAccessibilityService.isRunning()) {
+            error = "请先开启秒记无障碍服务，再进行会中收音"
+            return
+        }
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) start()
         else permission.launch(Manifest.permission.RECORD_AUDIO)
     }
