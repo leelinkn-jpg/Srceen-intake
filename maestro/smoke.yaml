@@ -1,0 +1,51 @@
+appId: com.linkn.screenintake
+name: smoke-navigation
+---
+- launchApp
+- waitForAnimationToEnd:
+    timeout: 8000
+- runFlow:
+    when:
+      visible: "欢迎使用「秒记」"
+    commands:
+      - scrollUntilVisible:
+          element: "我已了解，进入应用"
+          direction: DOWN
+          timeout: 20000
+      - tapOn: "我已了解，进入应用"
+      - waitForAnimationToEnd:
+          timeout: 5000
+- assertVisible: "工作"
+- assertVisible: "会议"
+- tapOn: "待办"
+- tapOn: "灵感"
+- tapOn: "会议"
+- tapOn: "健康"
+- waitForAnimationToEnd:
+    timeout: 3000
+- assertVisible: "饮食"
+- tapOn: "财务"
+- waitForAnimationToEnd:
+    timeout: 3000
+- assertVisible: "收支"
+- tapOn: "卡片"
+- assertVisible: "添加一张卡"
+- tapOn: "成长"
+- waitForAnimationToEnd:
+    timeout: 3000
+- assertVisible: "我的项目"
+- tapOn: "工作"
+- waitForAnimationToEnd:
+    timeout: 3000
+- tapOn: "待确认"
+- waitForAnimationToEnd:
+    timeout: 3000
+- tapOn: "返回"
+- tapOn: "设置"
+- waitForAnimationToEnd:
+    timeout: 3000
+- assertVisible: "设置"
+- tapOn:
+    text: "^保存$"
+- tapOn: "返回"
+- assertVisible: "工作"
