@@ -2,6 +2,7 @@ package com.linkn.screenintake.store
 
 import android.content.Context
 import androidx.documentfile.provider.DocumentFile
+import java.io.File
 
 /**
  * 手机同步目录的稳定结构。App 只接触这五个目录，不读取 Mini 专属的部门资料、模型规则和日志。
@@ -53,7 +54,17 @@ object StorageLayout {
         // readFile 可能缓存的是旧版根目录平铺文件；正式写入永远回到新中文目录，
         // 不能因为一次兼容读取又把后续写入锁回旧路径。
         dir.findFile(name)?.takeIf { it.isFile }?.let { return it }
-        val target = dir.createFile(mime, name) ?: error("创建 $name 失败")
+        // Raw DocumentFile.createFile appends the MIME extension, so
+        // createFile("text/csv", "卡片.csv") becomes 卡片.csv.csv and later
+        // reads of 卡片.csv look empty. file:// test/sync roots must use the exact name.
+        val target = if (root.uri.scheme == "file") {
+            val directory = File(dir.uri.path ?: error("无法解析${domainForFile(name)}目录"))
+            val exact = File(directory, name)
+            if (!exact.exists() && !exact.createNewFile()) error("创建 $name 失败")
+            DocumentFile.fromFile(exact)
+        } else {
+            dir.createFile(mime, name) ?: error("创建 $name 失败")
+        }
         root.findFile(name)?.takeIf { it.isFile }?.let { copyFile(context, it, target) }
         return target
     }
