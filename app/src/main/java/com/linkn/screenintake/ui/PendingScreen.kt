@@ -94,16 +94,19 @@ fun PendingScreen(
     var editingDraft by remember { mutableStateOf<PendingDraft?>(null) }
     var detailNote by remember { mutableStateOf<UnconfirmedNote?>(null) }
 
-    fun act(block: suspend () -> Unit) {
+    fun act(onSuccess: (() -> Unit)? = null, block: suspend () -> Unit) {
         scope.launch(Dispatchers.IO) {
             try {
                 block()
+                withContext(Dispatchers.Main) {
+                    onSuccess?.invoke()
+                    onReload()
+                }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     Toast.makeText(context, e.message ?: "保存失败，请稍后重试", Toast.LENGTH_LONG).show()
+                    onReload()
                 }
-            } finally {
-                withContext(Dispatchers.Main) { onReload() }
             }
         }
     }
@@ -167,18 +170,12 @@ fun PendingScreen(
             if (notes.isNotEmpty()) {
                 item {
                     Text(
-                        "识别失败的记录",
+                        "识别失败日志（一般可删，不是正式账单）",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-            if (notes.isNotEmpty()) {
-                item {
-                    Text("识别失败日志（一般可删，不是正式账单）", style = MaterialTheme.typography.titleSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
+                        modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+                    )
                 }
             }
             items(notes, key = { it.fileName }) { note ->
@@ -202,8 +199,7 @@ fun PendingScreen(
             result = result,
             onDismiss = { editingDraft = null },
             onSubmit = { updated ->
-                editingDraft = null
-                act {
+                act({ editingDraft = null }) {
                     CaptureConfirmActions.confirmOrEdit(context, draft.draftId, updated, null, updated.dueAt)
                     PendingCaptureNotifier.cancel(context, draft.draftId.hashCode())
                 }
