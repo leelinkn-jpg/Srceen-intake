@@ -1,6 +1,7 @@
 package com.linkn.screenintake.ui
 
 import android.graphics.Bitmap
+import android.widget.Toast
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -140,6 +141,19 @@ fun FinanceScreen(resumeTick: Int) {
     // 这里单独探测一下，跟"确实还没记过东西"的空列表区分开，提示明确该怎么办。
     var folderAccessible by remember { mutableStateOf(true) }
     val scope = rememberCoroutineScope()
+
+    fun persist(close: () -> Unit, action: () -> Unit) {
+        scope.launch {
+            runCatching { withContext(Dispatchers.IO) { action() } }
+                .onSuccess {
+                    close()
+                    reload()
+                }
+                .onFailure {
+                    Toast.makeText(context, it.message ?: "保存失败", Toast.LENGTH_LONG).show()
+                }
+        }
+    }
 
     fun keyOf(h: Holding) = "${h.market}:${h.code}"
 
@@ -399,17 +413,13 @@ fun FinanceScreen(resumeTick: Int) {
             cards = cards,
             onDismiss = { editingRow = null },
             onSave = { updated ->
-                editingRow = null
-                scope.launch(Dispatchers.IO) {
+                persist({ editingRow = null }) {
                     RecordStore(context).updateLedgerRow(folderUri, row, updated)
-                    reload()
                 }
             },
             onDelete = {
-                editingRow = null
-                scope.launch(Dispatchers.IO) {
+                persist({ editingRow = null }) {
                     RecordStore(context).deleteLedgerRow(folderUri, row)
-                    reload()
                 }
             }
         )
@@ -420,17 +430,13 @@ fun FinanceScreen(resumeTick: Int) {
             holding = holding,
             onDismiss = { editingHolding = null },
             onSave = { updated ->
-                editingHolding = null
-                scope.launch(Dispatchers.IO) {
+                persist({ editingHolding = null }) {
                     RecordStore(context).updateHolding(folderUri, holding, updated)
-                    reload()
                 }
             },
             onDelete = {
-                editingHolding = null
-                scope.launch(Dispatchers.IO) {
+                persist({ editingHolding = null }) {
                     RecordStore(context).deleteHolding(folderUri, holding)
-                    reload()
                 }
             }
         )
@@ -443,21 +449,17 @@ fun FinanceScreen(resumeTick: Int) {
             isNew = isNew,
             onDismiss = { editingCard = null },
             onSave = { updated ->
-                editingCard = null
-                scope.launch(Dispatchers.IO) {
+                persist({ editingCard = null }) {
                     if (isNew) {
                         RecordStore(context).addCard(folderUri, updated)
                     } else {
                         RecordStore(context).updateCard(folderUri, card, updated)
                     }
-                    reload()
                 }
             },
             onDelete = {
-                editingCard = null
-                scope.launch(Dispatchers.IO) {
+                persist({ editingCard = null }) {
                     RecordStore(context).deleteCard(folderUri, card)
-                    reload()
                 }
             },
             onTransfer = {
@@ -473,10 +475,8 @@ fun FinanceScreen(resumeTick: Int) {
             fromCard = from,
             onDismiss = { transferFromCard = null },
             onConfirm = { toCard, amount, note ->
-                transferFromCard = null
-                scope.launch(Dispatchers.IO) {
+                persist({ transferFromCard = null }) {
                     RecordStore(context).recordManualTransfer(folderUri, from.name, toCard.name, amount, note)
-                    reload()
                 }
             }
         )
