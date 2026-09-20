@@ -101,6 +101,14 @@ fun SettingsScreen(
                     }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
+                },
+                actions = {
+                    TextButton(onClick = {
+                        persist()
+                        Toast.makeText(context, "已保存", Toast.LENGTH_SHORT).show()
+                    }) {
+                        Text("保存")
+                    }
                 }
             )
         }
@@ -113,7 +121,6 @@ fun SettingsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            SystemStatusCard()
             val readyCount = listOf(accessibilityReady, overlayPermissionOk, folderChosen, apiKeySet).count { it }
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
@@ -228,6 +235,8 @@ fun SettingsScreen(
                 Spacer(Modifier.width(6.dp))
                 Text("测试整条链路（截的是本页面）")
             }
+
+            SystemStatusCard()
 
             UsageTips()
         }
