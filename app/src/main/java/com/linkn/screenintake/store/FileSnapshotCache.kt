@@ -76,8 +76,7 @@ class FileSnapshotCache private constructor(context: Context) : SQLiteOpenHelper
             val modified = file.lastModified()
             val length = file.length()
             get(context).read(uri, modified, length)?.let { return it }
-            val text = context.contentResolver.openInputStream(file.uri)
-                ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: return null
+            val text = HubIO.readText(context, file) ?: return null
             get(context).write(uri, modified, length, text)
             return text
         }

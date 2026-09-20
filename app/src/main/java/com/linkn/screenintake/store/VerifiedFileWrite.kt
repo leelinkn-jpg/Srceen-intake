@@ -33,7 +33,7 @@ internal object VerifiedFileWrite {
 
     fun replace(context: Context, file: DocumentFile, expected: String?, content: String) {
         if (active.get() == null) return transaction(context) { replace(context, file, expected, content) }
-        fun read() = context.contentResolver.openInputStream(file.uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+        fun read() = HubIO.openInput(context, file)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
             ?: error("无法读取 ${file.name}，已停止保存")
         val before = read()
         check(expected == null || before == expected) { "文件已被其他操作更新，请刷新后重试；原记录未覆盖" }
@@ -42,7 +42,7 @@ internal object VerifiedFileWrite {
             .put("before", before).put("after", content))
         persist(operation)
         check(read() == before) { "同步文件刚刚发生变化，修改已保留，尚未覆盖原文件" }
-        context.contentResolver.openOutputStream(file.uri, "wt")?.use { it.write(content.toByteArray(Charsets.UTF_8)) }
+        HubIO.openOutput(context, file, "wt")?.use { it.write(content.toByteArray(Charsets.UTF_8)) }
             ?: error("无法写入 ${file.name}，修改已保留")
         check(read() == content) { "保存校验未通过，修改已保留，请到系统状态检查" }
         runCatching { FileSnapshotCache.get(context).invalidate(file.uri.toString()) }
@@ -65,17 +65,24 @@ internal object VerifiedFileWrite {
                     val uri = item.getString("uri")
                     changes[uri] = (changes[uri]?.first ?: item.getString("before")) to item.getString("after")
                 }
-                fun read(uri: String) = context.contentResolver.openInputStream(android.net.Uri.parse(uri))
-                    ?.bufferedReader()?.use { it.readText() } ?: error("读取失败")
+                fun read(uri: String): String {
+                    val parsed = android.net.Uri.parse(uri)
+                    val stream = if (parsed.scheme == "file") {
+                        java.io.FileInputStream(java.io.File(parsed.path!!))
+                    } else context.contentResolver.openInputStream(parsed)
+                    return stream?.bufferedReader()?.use { it.readText() } ?: error("读取失败")
+                }
                 val current = changes.keys.associateWith(::read)
                 check(changes.all { (uri, versions) -> current[uri] == versions.first || current[uri] == versions.second })
                 val complete = changes.all { (uri, versions) -> current[uri] == versions.second }
                 if (!complete) changes.entries.reversed().forEach { (uri, versions) ->
                     check(read(uri) == current[uri])
                     if (current[uri] != versions.first) {
-                        context.contentResolver.openOutputStream(android.net.Uri.parse(uri), "wt")?.use {
-                            it.write(versions.first.toByteArray(Charsets.UTF_8))
-                        } ?: error("恢复失败")
+                        val parsed = android.net.Uri.parse(uri)
+                        val out = if (parsed.scheme == "file") {
+                            java.io.FileOutputStream(java.io.File(parsed.path!!))
+                        } else context.contentResolver.openOutputStream(parsed, "wt")
+                        out?.use { it.write(versions.first.toByteArray(Charsets.UTF_8)) } ?: error("恢复失败")
                         check(read(uri) == versions.first)
                     }
                 }

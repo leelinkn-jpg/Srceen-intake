@@ -1,4 +1,6 @@
 package com.linkn.screenintake.report
+import com.linkn.screenintake.store.HubIO
+import com.linkn.screenintake.store.HubRoot
 
 import android.Manifest
 import android.app.NotificationChannel
@@ -32,10 +34,13 @@ class AiReportNotificationWorker(context: Context, params: WorkerParameters) : C
         val todayReport = all.firstOrNull { it.period == ReportPeriod.DAILY && java.time.Instant.ofEpochMilli(it.generatedAt)
             .atZone(java.time.ZoneId.systemDefault()).toLocalDate().toString() == today }
         val jobStatus = if (todayReport != null) "今日报告已到达" else runCatching {
-            val root = androidx.documentfile.provider.DocumentFile.fromTreeUri(applicationContext, android.net.Uri.parse(folder))
+            val root = com.linkn.screenintake.store.HubRoot.resolve(applicationContext, folder)
             val job = root?.findFile("系统")?.findFile("系统状态")?.findFile("分析任务")?.findFile("$today.json")
-            val json = job?.let { applicationContext.contentResolver.openInputStream(it.uri)?.bufferedReader()?.use { input -> org.json.JSONObject(input.readText()) } }
-            when (json?.optString("status")) {
+            val json = job?.let { HubIO.openInput(applicationContext, it)?.bufferedReader()?.use { input -> org.json.JSONObject(input.readText()) } }
+            // 优先展示 Mini 写入的短中文 message；没有时再回退到状态标签
+            val detail = json?.optString("message").orEmpty().trim()
+            if (detail.isNotEmpty()) detail
+            else when (json?.optString("status")) {
                 "queued" -> "今日报告等待模型执行"
                 "running" -> "今日报告生成中"
                 "failed", "blocked" -> "今日报告未完成，等待处理或重试"

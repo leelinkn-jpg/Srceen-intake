@@ -16,8 +16,8 @@ android {
         applicationId = "com.linkn.screenintake"
         minSdk = 30
         targetSdk = 35
-        versionCode = 12
-        versionName = "0.3.0"
+        versionCode = 20
+        versionName = "0.3.8"
         buildConfigField("String", "BUILD_STAMP", "\"${ZonedDateTime.now(ZoneId.of("Asia/Shanghai")).format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))}\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

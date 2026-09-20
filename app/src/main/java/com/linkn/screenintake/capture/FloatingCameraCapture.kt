@@ -206,7 +206,7 @@ class FloatingCameraCapture private constructor(private val context: Context) {
                 // 都没有"一模一样。
                 isClickable = true
             }
-            root.addView(
+            root. addView(
                 freezeView,
                 FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
             )

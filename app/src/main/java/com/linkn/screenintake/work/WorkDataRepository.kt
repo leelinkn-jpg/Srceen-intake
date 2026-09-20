@@ -1,4 +1,5 @@
 package com.linkn.screenintake.work
+import com.linkn.screenintake.store.HubRoot
 
 import android.content.Context
 import android.net.Uri
@@ -57,7 +58,7 @@ class WorkDataRepository(private val context: Context) {
         return (0 until values.length()).mapNotNull { values.optJSONObject(it) }
     }
     private fun json(folder: String, name: String): JSONObject? = runCatching {
-        val root = DocumentFile.fromTreeUri(context, Uri.parse(folder)) ?: return@runCatching null
+        val root = HubRoot.resolve(context, folder) ?: return@runCatching null
         val work = StorageLayout.domain(root, StorageLayout.WORK, false) ?: return@runCatching null
         val file = work.findFile("业务数据")?.findFile(name) ?: return@runCatching null
         FileSnapshotCache.readFile(context, file)?.let(::JSONObject)

@@ -36,7 +36,7 @@ class SyncNotificationWorker(context: Context, params: WorkerParameters) : Corou
         if (folder.isBlank()) return@runCatching Result.success()
         // Syncthing 写入后旧 DocumentFile 句柄可能已对应不到当前文件，先清掉句柄缓存。
         StorageLayout.invalidateExternalHandles(folder)
-        val root = DocumentFile.fromTreeUri(applicationContext, Uri.parse(folder))
+        val root = HubRoot.resolve(applicationContext, folder)
             ?: return@runCatching Result.success()
         val current = linkedMapOf<String, String>()
         listOf("财务", "健康", "工作", "成长").forEach { domain ->
@@ -105,7 +105,7 @@ class SyncNotificationWorker(context: Context, params: WorkerParameters) : Corou
     private fun collectHealthPending(dir: DocumentFile?, prefix: String, out: MutableMap<String, String>) {
         dir?.listFiles()?.filter { it.isFile && it.name?.endsWith(".json", true) == true }?.forEach { file ->
             val pending = runCatching {
-                applicationContext.contentResolver.openInputStream(file.uri)?.bufferedReader()?.use {
+                HubIO.openInput(applicationContext, file)?.bufferedReader()?.use {
                     JSONObject(it.readText()).optString("status", "pending") == "pending"
                 } ?: false
             }.getOrDefault(false)
@@ -124,7 +124,7 @@ class SyncNotificationWorker(context: Context, params: WorkerParameters) : Corou
     private fun collectPendingPlans(dir: DocumentFile?, out: MutableMap<String, String>) {
         dir?.listFiles()?.filter { it.isFile && it.name?.endsWith(".json", true) == true }?.forEach { file ->
             val pending = runCatching {
-                applicationContext.contentResolver.openInputStream(file.uri)?.bufferedReader()?.use {
+                HubIO.openInput(applicationContext, file)?.bufferedReader()?.use {
                     JSONObject(it.readText()).optString("status") == "pending"
                 } ?: false
             }.getOrDefault(false)
@@ -135,7 +135,7 @@ class SyncNotificationWorker(context: Context, params: WorkerParameters) : Corou
     private fun collectPendingChanges(dir: DocumentFile?, out: MutableMap<String, String>) {
         dir?.listFiles()?.filter { it.isFile && it.name?.endsWith(".json", true) == true }?.forEach { file ->
             val pending = runCatching {
-                applicationContext.contentResolver.openInputStream(file.uri)?.bufferedReader()?.use {
+                HubIO.openInput(applicationContext, file)?.bufferedReader()?.use {
                     JSONObject(it.readText()).optString("status") == "pending"
                 } ?: false
             }.getOrDefault(false)
@@ -159,7 +159,7 @@ class SyncNotificationWorker(context: Context, params: WorkerParameters) : Corou
             if (file.isDirectory) collectState(file, "$prefix/${file.name}", out)
             else if (file.name?.endsWith(".json", true) == true && file.name?.startsWith(".") != true) {
                 val completed = runCatching {
-                    applicationContext.contentResolver.openInputStream(file.uri)?.bufferedReader()?.use {
+                    HubIO.openInput(applicationContext, file)?.bufferedReader()?.use {
                         JSONObject(it.readText()).optString("status") == "complete"
                     } ?: false
                 }.getOrDefault(false)

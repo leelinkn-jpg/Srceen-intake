@@ -73,6 +73,30 @@ class RecordStore(private val context: Context) {
         deleteNote(folder, current.index)
     }
 
+    /** 工作 Tab 手动新建待办（必须有提醒时间）。 */
+    fun addManualTodo(folder: String, text: String, domain: String, dueAt: String) = serializedWrite {
+        require(text.isNotBlank()) { "请填写待办内容" }
+        require(dueAt.isNotBlank()) { "待办必须设置提醒时间" }
+        val todoId = "todo_" + java.util.UUID.randomUUID().toString()
+        val safeDomain = if (domain == "其他" || domain == "生活") "其他" else "工作"
+        val meta = JSONObject().put("id", todoId).put("kind", safeDomain).put("dueAt", dueAt).toString()
+        val line = "- [ ] [" + safeDomain + "] " + text.trim() + " <!--TODO_META:" + meta + "-->"
+        appendText(folder, "待办.md", "text/markdown", "# 待办" + "\n", line)
+        runCatching { TodoReminderWorker.schedule(context, todoId, text.trim(), dueAt) }
+            .onFailure { android.util.Log.w(TAG, "待办已写入，但本地提醒调度失败：$todoId", it) }
+    }
+
+    /** 工作 Tab 手动新建灵感。 */
+    fun addManualNote(folder: String, content: String, domain: String) = serializedWrite {
+        require(content.isNotBlank()) { "请填写灵感内容" }
+        val safeDomain = if (domain == "工作") "工作" else "其他"
+        val now = java.time.LocalDateTime.now()
+            .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+        val trimmed = content.trim().replace(Regex("(?m)^## "), "### ")
+        val block = "## [" + safeDomain + "] " + now + "\n" + trimmed + "\n"
+        appendText(folder, "灵感.md", "text/markdown", "# 灵感与笔记" + "\n", block)
+    }
+
     fun updateCard(folder: String, original: CardAccount, updated: CardAccount) = serializedWrite {
         val current = uniqueRecord(LedgerReader.readCards(context, folder)) { it.copy(index = original.index) == original }
         updateCard(folder, current.index, updated)
@@ -110,8 +134,7 @@ class RecordStore(private val context: Context) {
     }
 
     private fun root(folderUri: String): DocumentFile {
-        val uri = Uri.parse(folderUri)
-        return DocumentFile.fromTreeUri(context, uri)
+        return HubRoot.resolve(context, folderUri)
             ?: throw IllegalStateException("保存文件夹已失效，请到设置里重新选择")
     }
 
@@ -280,7 +303,7 @@ class RecordStore(private val context: Context) {
         val marker = "<!--AI_ACTION:$safeId-->"
         val r = root(folderUri)
         val existingFile = StorageLayout.readFile(r, "待办.md")
-        val existing = existingFile?.let { file -> context.contentResolver.openInputStream(file.uri)
+        val existing = existingFile?.let { file -> HubIO.openInput(context, file)
             ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } }.orEmpty()
         if (existing.contains(marker)) return@serializedWrite
         val safeDomain = if (domain == "其他" || domain == "生活") "其他" else "工作"
@@ -498,7 +521,7 @@ class RecordStore(private val context: Context) {
         val fileName = if (!safeCaption.isNullOrBlank()) "${stamp}_$safeCaption.jpg" else "$stamp.jpg"
         val file = dir.createFile("image/jpeg", fileName)
             ?: throw IllegalStateException("创建照片文件失败")
-        context.contentResolver.openOutputStream(file.uri, "wt")?.use { it.write(imageBytes) }
+        HubIO.openOutput(context, file, "wt")?.use { it.write(imageBytes) }
             ?: throw IllegalStateException("无法写入照片文件")
         DataChangeSignal.bump()
         return fileName
@@ -517,9 +540,9 @@ class RecordStore(private val context: Context) {
         val fromDir = photoRoot.findFile(fromDirName) ?: return false
         val file = fromDir.findFile(fileName) ?: return false
         val toDir = photoRoot.findFile(toDirName) ?: photoRoot.createDirectory(toDirName) ?: return false
-        val bytes = context.contentResolver.openInputStream(file.uri)?.use { it.readBytes() } ?: return false
+        val bytes = HubIO.openInput(context, file)?.use { it.readBytes() } ?: return false
         val newFile = toDir.createFile("image/jpeg", fileName) ?: return false
-        context.contentResolver.openOutputStream(newFile.uri, "wt")?.use { it.write(bytes) } ?: return false
+        HubIO.openOutput(context, newFile, "wt")?.use { it.write(bytes) } ?: return false
         file.delete()
         DataChangeSignal.bump()
         return true
@@ -664,7 +687,7 @@ class RecordStore(private val context: Context) {
                 "原始文字：\n$screenText\n\n" +
                 "$JSON_MARKER\n" +
                 result.toJson()
-            context.contentResolver.openOutputStream(file.uri, "wt")?.use {
+            HubIO.openOutput(context, file, "wt")?.use {
                 it.write(content.toByteArray(Charsets.UTF_8))
             }
             DataChangeSignal.bump()
@@ -695,7 +718,7 @@ class RecordStore(private val context: Context) {
             .mapNotNull { file ->
                 val fileName = file.name ?: return@mapNotNull null
                 val draftId = fileName.removePrefix(DRAFT_PREFIX).removeSuffix(".txt")
-                val text = context.contentResolver.openInputStream(file.uri)
+                val text = HubIO.openInput(context, file)
                     ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: return@mapNotNull null
                 val marker = "\n$JSON_MARKER\n"
                 val markerIndex = text.indexOf(marker)
@@ -733,7 +756,7 @@ class RecordStore(private val context: Context) {
             .filter { it.name?.startsWith(DRAFT_PREFIX) != true && it.name?.endsWith(".txt") == true }
             .mapNotNull { file ->
                 val fileName = file.name ?: return@mapNotNull null
-                val text = context.contentResolver.openInputStream(file.uri)
+                val text = HubIO.openInput(context, file)
                     ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: return@mapNotNull null
                 UnconfirmedNote(fileName = fileName, content = text.trim(), savedAtMillis = file.lastModified())
             }
@@ -884,7 +907,7 @@ class RecordStore(private val context: Context) {
         val r = root(folderUri)
         val source = StorageLayout.readFile(r, fileName) ?: error("找不到 $fileName，请刷新后重试")
         val file = StorageLayout.writableFile(context, r, fileName, source.type ?: "text/plain")
-        val existing = context.contentResolver.openInputStream(file.uri)
+        val existing = HubIO.openInput(context, file)
             ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
             ?: throw IllegalStateException("无法读取已有的 $fileName，已停止写入以保护原始数据")
         val lines = existing.split("\n")
@@ -920,7 +943,11 @@ class RecordStore(private val context: Context) {
         val sourceOrder = displayed.sortedBy { it.index }
         val newBlocks = transform(sourceOrder)
         val body = newBlocks.sortedBy { it.index }.joinToString("") { block ->
-            "\n## [${block.domain}] ${block.heading}\n${block.content}\n"
+            val heading = block.heading.trim()
+                .removePrefix("#").trim().removePrefix("#").trim()
+                .replace(Regex("""^(\[[^\]]+\]\s*)+"""), "")
+                .trim()
+            "\n## [${block.domain}] $heading\n${block.content}\n"
         }
         writeWholeFile(folderUri, fileName, "text/markdown", "# 灵感与笔记\n$body")
     }
@@ -965,7 +992,7 @@ class RecordStore(private val context: Context) {
     ) = writeLock.withLock {
         val r = root(folderUri)
         var file = StorageLayout.readFile(r, fileName)
-        val existing = if (file != null) context.contentResolver.openInputStream(file.uri)
+        val existing = if (file != null) HubIO.openInput(context, file)
             ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
             ?: throw IllegalStateException("无法读取已有的 $fileName，已停止写入以保护原始数据") else ""
         if (file == null) {

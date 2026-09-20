@@ -88,7 +88,7 @@ class LocalDataIndexWorker(context: Context, params: WorkerParameters) : Corouti
         fun refresh(context: Context) {
             WorkManager.getInstance(context).enqueueUniqueWork(
                 WORK_NAME,
-                ExistingWorkPolicy.KEEP,
+                ExistingWorkPolicy.REPLACE,
                 OneTimeWorkRequestBuilder<LocalDataIndexWorker>().build()
             )
         }

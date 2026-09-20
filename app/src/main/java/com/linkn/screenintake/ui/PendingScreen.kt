@@ -122,6 +122,12 @@ fun PendingScreen(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            if (drafts.isNotEmpty()) {
+                item {
+                    Text("待确认（可调整后落盘）", style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.padding(bottom = 4.dp))
+                }
+            }
             items(drafts, key = { it.draftId }) { draft ->
                 DraftCard(
                     draft = draft,
@@ -166,6 +172,13 @@ fun PendingScreen(
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+            }
+            if (notes.isNotEmpty()) {
+                item {
+                    Text("识别失败日志（一般可删，不是正式账单）", style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
                 }
             }
             items(notes, key = { it.fileName }) { note ->
@@ -254,7 +267,7 @@ private fun DraftCard(
             // 直接改——这里提示一下，代码/股数/价格不对的话，删掉重来比编辑更保险。
             if (result != null && result.isTrade) {
                 Text(
-                    "确认后会计入持仓，代码/股数/价格不对的话建议直接删除重新截图或重新打字",
+                    "确认后会计入持仓；不对请点「调整」改代码/股数/价格",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 6.dp)
@@ -264,7 +277,7 @@ private fun DraftCard(
             // 数字不对就删掉重来，比编辑更保险。
             if (result != null && result.isHolding) {
                 Text(
-                    "确认后会直接覆盖这只股票的持仓状态，代码/股数/成本不对的话建议直接删除重新截图或重新打字",
+                    "确认后会覆盖持仓；不对请点「调整」改代码/股数/成本",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 6.dp)
@@ -274,7 +287,7 @@ private fun DraftCard(
             // 认错了就删掉重来，比编辑更保险（编辑框只能加备注，改不了转出/转入的账户）。
             if (result != null && result.isTransfer) {
                 Text(
-                    "确认后会同时改动转出/转入两张卡的余额，账户或金额不对的话建议直接删除重新截图或重新打字",
+                    "确认后会改两张卡余额；账户或金额不对请点「调整」",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 6.dp)
@@ -331,12 +344,23 @@ private fun EditDraftDialog(
     onDismiss: () -> Unit,
     onSubmit: (ClassifyResult) -> Unit
 ) {
-    val standardTypes = linkedMapOf(
+    val softTypes = linkedMapOf(
         "todo" to "待办", "note" to "灵感", "expense" to "支出",
         "income" to "收入", "meal_note" to "饮食"
     )
+    val specialtyTypes = linkedMapOf(
+        "transfer" to "转账", "trade" to "股票交易", "holding" to "持仓设置",
+        "weight" to "体重", "digital_health" to "屏幕使用"
+    )
+    val isSpecialty = result.type in specialtyTypes
     var selectedType by remember {
-        mutableStateOf(result.type.takeIf { it in standardTypes } ?: "note")
+        mutableStateOf(
+            when {
+                result.type in specialtyTypes -> result.type
+                result.type in softTypes -> result.type
+                else -> "note"
+            }
+        )
     }
     var content by remember { mutableStateOf(result.summary ?: result.merchant.orEmpty()) }
     var category by remember { mutableStateOf(result.category.orEmpty()) }
@@ -346,12 +370,19 @@ private fun EditDraftDialog(
         mutableStateOf(result.normalizedDomain().let { if (it == "习惯") "成长" else it })
     }
     var purpose by remember { mutableStateOf(result.purpose) }
+    var tradeSide by remember { mutableStateOf(result.tradeSide ?: "buy") }
+    var market by remember { mutableStateOf(result.market ?: "A") }
+    var stockCode by remember { mutableStateOf(result.stockCode.orEmpty()) }
+    var stockName by remember { mutableStateOf(result.stockName.orEmpty()) }
+    var shares by remember { mutableStateOf(result.shares?.toString().orEmpty()) }
+    var price by remember { mutableStateOf(result.price?.toString().orEmpty()) }
+    var weightKg by remember { mutableStateOf(result.amount?.toString().orEmpty()) }
+    var screenMinutes by remember { mutableStateOf(result.amount?.toInt()?.toString().orEmpty()) }
     val context = LocalContext.current
     val folderUri = ScreenIntakeApp.instance.settingsStore.folderUri
     val cards by produceState(initialValue = emptyList<CardAccount>(), folderUri) {
         value = withContext(Dispatchers.IO) { LedgerReader.readCards(context, folderUri) }
     }
-    // “银行(1156)”和卡片管理的“银行1156”不是同一串文字，但尾号相同就自动预选。
     fun matchingCardName(raw: String?): String? {
         if (raw.isNullOrBlank()) return null
         val digits = raw.filter(Char::isDigit)
@@ -364,8 +395,12 @@ private fun EditDraftDialog(
         }?.name
     }
     var card by remember(result.card) { mutableStateOf<String?>(null) }
-    LaunchedEffect(cards, result.card) {
+    var fromCard by remember(result.fromCard) { mutableStateOf<String?>(null) }
+    var toCard by remember(result.toCard) { mutableStateOf<String?>(null) }
+    LaunchedEffect(cards, result.card, result.fromCard, result.toCard) {
         if (card == null) card = matchingCardName(result.card)
+        if (fromCard == null) fromCard = matchingCardName(result.fromCard) ?: result.fromCard
+        if (toCard == null) toCard = matchingCardName(result.toCard) ?: result.toCard
     }
 
     var pickedDueAt by remember {
@@ -402,6 +437,13 @@ private fun EditDraftDialog(
     val canSubmit = when (selectedType) {
         "todo" -> content.isNotBlank() && pickedDueAt != null
         "expense", "income" -> moneyValid
+        "transfer" -> amount.toDoubleOrNull()?.let { it > 0 } == true &&
+            !fromCard.isNullOrBlank() && !toCard.isNullOrBlank() && fromCard != toCard
+        "trade" -> stockCode.isNotBlank() && shares.toDoubleOrNull()?.let { it > 0 } == true &&
+            price.toDoubleOrNull()?.let { it > 0 } == true
+        "holding" -> stockCode.isNotBlank() && shares.toDoubleOrNull()?.let { it >= 0 } == true
+        "weight" -> weightKg.toDoubleOrNull()?.let { it > 0 } == true
+        "digital_health" -> screenMinutes.toIntOrNull()?.let { it >= 0 } == true
         else -> content.isNotBlank()
     }
 
@@ -414,64 +456,136 @@ private fun EditDraftDialog(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text("确认记录", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Text("记录类型", style = MaterialTheme.typography.labelLarge)
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    standardTypes.forEach { (value, label) ->
-                        FilterChip(selected = selectedType == value, onClick = {
-                            selectedType = value
-                        }, label = { Text(label) })
+                if (isSpecialty) {
+                    Text(
+                        "类型：${specialtyTypes[result.type] ?: result.type}（确认后会影响账户/持仓/健康数据，请改对关键字段）",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    Text("记录类型", style = MaterialTheme.typography.labelLarge)
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        softTypes.forEach { (value, label) ->
+                            FilterChip(selected = selectedType == value, onClick = {
+                                selectedType = value
+                            }, label = { Text(label) })
+                        }
                     }
                 }
 
-                if (selectedType == "expense" || selectedType == "income") {
-                    OutlinedTextField(
-                        value = amount,
-                        onValueChange = { amount = it.filter { ch -> ch.isDigit() || ch == '.' } },
-                        label = { Text("金额") }, prefix = { Text("¥") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        modifier = Modifier.fillMaxWidth(), singleLine = true
-                    )
-                    if (selectedType == "expense") {
-                        ExpenseCategoryPicker(category) { category = it }
-                        ExpensePurposePicker(purpose) { purpose = it }
-                    } else {
-                        OutlinedTextField(category, { category = it }, label = { Text("收入分类") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-                    }
-                    ExpenseCardPicker(card, cards) { card = it }
-                }
-                if (selectedType == "todo") {
-                    Text("待办类型", style = MaterialTheme.typography.labelLarge)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf("工作", "其他").forEach { value ->
-                            FilterChip(selected = todoKind == value, onClick = { todoKind = value }, label = { Text(value) })
-                        }
-                    }
-                    OutlinedButton(onClick = { launchDateTimePicker() }, modifier = Modifier.fillMaxWidth()) {
-                        Text(dueAtDisplay?.let { "提醒时间：$it（点击修改）" } ?: "选择提醒日期和时间")
-                    }
-                    if (pickedDueAt == null) {
-                        Text(
-                            "请选择提醒时间",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.error
+                when (selectedType) {
+                    "expense", "income" -> {
+                        OutlinedTextField(
+                            value = amount,
+                            onValueChange = { amount = it.filter { ch -> ch.isDigit() || ch == '.' } },
+                            label = { Text("金额") }, prefix = { Text("¥") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.fillMaxWidth(), singleLine = true
                         )
+                        if (selectedType == "expense") {
+                            ExpenseCategoryPicker(category) { category = it }
+                            ExpensePurposePicker(purpose) { purpose = it }
+                        } else {
+                            OutlinedTextField(category, { category = it }, label = { Text("收入分类") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                        }
+                        ExpenseCardPicker(card, cards) { card = it }
                     }
-                }
-                if (selectedType == "note") {
-                    Text("灵感分类", style = MaterialTheme.typography.labelLarge)
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        listOf("工作", "其他").forEach { value ->
-                            FilterChip(selected = noteDomain == value, onClick = { noteDomain = value }, label = { Text(value) })
+                    "transfer" -> {
+                        Text("转出账户", style = MaterialTheme.typography.labelLarge)
+                        ExpenseCardPicker(fromCard, cards) { fromCard = it }
+                        Text("转入账户", style = MaterialTheme.typography.labelLarge)
+                        ExpenseCardPicker(toCard, cards) { toCard = it }
+                        OutlinedTextField(
+                            value = amount,
+                            onValueChange = { amount = it.filter { ch -> ch.isDigit() || ch == '.' } },
+                            label = { Text("转账金额") }, prefix = { Text("¥") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.fillMaxWidth(), singleLine = true
+                        )
+                        if (!fromCard.isNullOrBlank() && fromCard == toCard) {
+                            Text("转出和转入不能是同一张卡", color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                    "trade" -> {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf("buy" to "买入", "sell" to "卖出").forEach { (v, label) ->
+                                FilterChip(selected = tradeSide == v, onClick = { tradeSide = v }, label = { Text(label) })
+                            }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf("A" to "A股", "US" to "美股", "HK" to "港股").forEach { (v, label) ->
+                                FilterChip(selected = market == v, onClick = { market = v }, label = { Text(label) })
+                            }
+                        }
+                        OutlinedTextField(stockCode, { stockCode = it }, label = { Text("证券代码") },
+                            modifier = Modifier.fillMaxWidth(), singleLine = true)
+                        OutlinedTextField(stockName, { stockName = it }, label = { Text("证券名称") },
+                            modifier = Modifier.fillMaxWidth(), singleLine = true)
+                        OutlinedTextField(shares, { shares = it.filter { ch -> ch.isDigit() || ch == '.' } },
+                            label = { Text("股数") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.fillMaxWidth(), singleLine = true)
+                        OutlinedTextField(price, { price = it.filter { ch -> ch.isDigit() || ch == '.' } },
+                            label = { Text("每股价格") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.fillMaxWidth(), singleLine = true)
+                    }
+                    "holding" -> {
+                        OutlinedTextField(stockCode, { stockCode = it }, label = { Text("证券代码") },
+                            modifier = Modifier.fillMaxWidth(), singleLine = true)
+                        OutlinedTextField(stockName, { stockName = it }, label = { Text("证券名称") },
+                            modifier = Modifier.fillMaxWidth(), singleLine = true)
+                        OutlinedTextField(shares, { shares = it.filter { ch -> ch.isDigit() || ch == '.' } },
+                            label = { Text("当前股数") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.fillMaxWidth(), singleLine = true)
+                        OutlinedTextField(price, { price = it.filter { ch -> ch.isDigit() || ch == '.' } },
+                            label = { Text("成本价（可空）") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.fillMaxWidth(), singleLine = true)
+                    }
+                    "weight" -> {
+                        OutlinedTextField(weightKg, { weightKg = it.filter { ch -> ch.isDigit() || ch == '.' } },
+                            label = { Text("体重 (kg)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.fillMaxWidth(), singleLine = true)
+                    }
+                    "digital_health" -> {
+                        OutlinedTextField(screenMinutes, { screenMinutes = it.filter { ch -> ch.isDigit() } },
+                            label = { Text("屏幕使用总分钟") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.fillMaxWidth(), singleLine = true)
+                    }
+                    "todo" -> {
+                        Text("待办类型", style = MaterialTheme.typography.labelLarge)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf("工作", "其他").forEach { value ->
+                                FilterChip(selected = todoKind == value, onClick = { todoKind = value }, label = { Text(value) })
+                            }
+                        }
+                        OutlinedButton(onClick = { launchDateTimePicker() }, modifier = Modifier.fillMaxWidth()) {
+                            Text(dueAtDisplay?.let { "提醒时间：$it（点击修改）" } ?: "选择提醒日期和时间")
+                        }
+                        if (pickedDueAt == null) {
+                            Text("请选择提醒时间", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                    "note" -> {
+                        Text("灵感分类", style = MaterialTheme.typography.labelLarge)
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            listOf("工作", "其他").forEach { value ->
+                                FilterChip(selected = noteDomain == value, onClick = { noteDomain = value }, label = { Text(value) })
+                            }
                         }
                     }
                 }
+
                 OutlinedTextField(
                     value = content, onValueChange = { content = it },
-                    label = { Text(if (selectedType == "expense" || selectedType == "income") "说明" else "具体内容") },
+                    label = { Text(when (selectedType) {
+                        "expense", "income", "transfer" -> "说明"
+                        "weight", "digital_health" -> "备注"
+                        else -> "具体内容"
+                    }) },
                     minLines = 2, modifier = Modifier.fillMaxWidth()
                 )
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -486,13 +600,27 @@ private fun EditDraftDialog(
                             }
                             onSubmit(result.copy(
                                 type = selectedType,
-                                amount = if (selectedType == "expense" || selectedType == "income") amount.toDoubleOrNull() else result.amount,
+                                amount = when (selectedType) {
+                                    "expense", "income", "transfer" -> amount.toDoubleOrNull()
+                                    "weight" -> weightKg.toDoubleOrNull()
+                                    "digital_health" -> screenMinutes.toIntOrNull()?.toDouble()
+                                    else -> result.amount
+                                },
                                 category = if (selectedType == "expense" || selectedType == "income") category.trim() else result.category,
-                                summary = content.trim(), domain = domain,
+                                summary = content.trim().ifBlank { result.summary },
+                                domain = domain,
                                 dueAt = if (selectedType == "todo") dueAtIso else null,
                                 whenText = if (selectedType == "todo") dueAtDisplay else null,
                                 purpose = if (selectedType == "expense") purpose else null,
-                                card = if (selectedType == "expense" || selectedType == "income") card else null
+                                card = if (selectedType == "expense" || selectedType == "income") card else result.card,
+                                fromCard = if (selectedType == "transfer") fromCard else result.fromCard,
+                                toCard = if (selectedType == "transfer") toCard else result.toCard,
+                                tradeSide = if (selectedType == "trade") tradeSide else result.tradeSide,
+                                market = if (selectedType == "trade" || selectedType == "holding") market else result.market,
+                                stockCode = if (selectedType == "trade" || selectedType == "holding") stockCode.trim() else result.stockCode,
+                                stockName = if (selectedType == "trade" || selectedType == "holding") stockName.trim() else result.stockName,
+                                shares = if (selectedType == "trade" || selectedType == "holding") shares.toDoubleOrNull() else result.shares,
+                                price = if (selectedType == "trade" || selectedType == "holding") price.toDoubleOrNull() else result.price
                             ))
                         },
                         enabled = canSubmit

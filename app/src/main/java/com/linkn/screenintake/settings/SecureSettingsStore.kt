@@ -38,6 +38,10 @@ class SecureSettingsStore(context: Context) {
         get() = prefs.getString(KEY_FOLDER_URI, "") ?: ""
         set(value) = prefs.edit().putString(KEY_FOLDER_URI, value).apply()
 
+    /** 测试绑定等场景需要立刻可读到新值，避免 WorkManager 抢跑读到空 URI。 */
+    fun setFolderUriCommit(value: String): Boolean =
+        prefs.edit().putString(KEY_FOLDER_URI, value).commit()
+
     /** 用户自己写的分类偏好，每次分类都会带上一起发给模型 */
     var classifyRules: String
         get() = prefs.getString(KEY_RULES, DEFAULT_RULES) ?: DEFAULT_RULES

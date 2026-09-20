@@ -1,4 +1,6 @@
 package com.linkn.screenintake.meeting
+import com.linkn.screenintake.store.HubRoot
+import com.linkn.screenintake.store.HubIO
 
 import android.content.Context
 import android.net.Uri
@@ -42,7 +44,7 @@ class MeetingRepository(private val context: Context) {
         // Mini 会在同一目录中把 pending_local 更新为 ready。即使手机已有本地记录，
         // 也必须接收包含更多转录内容或更完整状态的同步副本。
         runCatching {
-            val root = DocumentFile.fromTreeUri(context, Uri.parse(folderUri))
+            val root = HubRoot.resolve(context, folderUri)
             val work = root?.let { StorageLayout.domain(it, StorageLayout.WORK, false) }
             val directories = listOfNotNull(
                 work?.findFile("会议记录"), work?.findFile("晨会记录"),
@@ -89,7 +91,7 @@ class MeetingRepository(private val context: Context) {
         if (target.exists() && target.length() > WavAudio.HEADER_SIZE) return target
         val remote = archiveDir(record, false)?.findFile("录音.wav") ?: error("找不到录音文件")
         val temp = File(target.parentFile, "录音.download")
-        context.contentResolver.openInputStream(remote.uri)?.use { input ->
+        HubIO.openInput(context, remote)?.use { input ->
             temp.outputStream().use { output -> input.copyTo(output) }
         } ?: error("无法读取同步目录中的录音")
         check(temp.length() > WavAudio.HEADER_SIZE) { "录音文件不完整" }
@@ -143,7 +145,7 @@ class MeetingRepository(private val context: Context) {
     }
 
     private fun archiveDir(record: MeetingRecord, create: Boolean): DocumentFile? {
-        val root = DocumentFile.fromTreeUri(context, Uri.parse(record.folderUri)) ?: error("请先选择保存文件夹")
+        val root = HubRoot.resolve(context, record.folderUri) ?: error("请先选择保存文件夹")
         val work = StorageLayout.domain(root, StorageLayout.WORK, false)
         val current = work?.findFile("会议记录")?.let { findRecordDirectory(it, record.id) }
         val oldNamed = work?.findFile("晨会记录")?.let { findRecordDirectory(it, record.id) }
@@ -169,7 +171,7 @@ class MeetingRepository(private val context: Context) {
             if (!directory.isDirectory) return@firstOrNull false
             val metadata = directory.findFile("记录.json") ?: return@firstOrNull false
             runCatching {
-                context.contentResolver.openInputStream(metadata.uri)?.bufferedReader()?.use {
+                HubIO.openInput(context, metadata)?.bufferedReader()?.use {
                     MeetingRecord.fromJson(it.readText()).id == id
                 } == true
             }.getOrDefault(false)
@@ -186,7 +188,7 @@ class MeetingRepository(private val context: Context) {
     }
     private fun write(dir: DocumentFile, name: String, mime: String, writer: (java.io.OutputStream) -> Unit) {
         val f = dir.findFile(name) ?: dir.createFile(mime, name) ?: error("无法创建 $name")
-        context.contentResolver.openOutputStream(f.uri, "wt")?.use(writer) ?: error("无法写入 $name")
+        HubIO.openOutput(context, f, "wt")?.use(writer) ?: error("无法写入 $name")
     }
     private fun atomicWrite(file: File, content: String) {
         val atomic = AtomicFile(file)

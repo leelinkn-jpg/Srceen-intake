@@ -138,9 +138,9 @@ fun SettingsScreen(
                     Text(if (overlayPermissionOk) "已开启，点这里可管理" else "去设置里开启")
                 }
             }
-            StatusRow(Icons.Default.Folder, "秒记同步文件夹", "自动按财务、健康、工作、成长归档", folderChosen) {
+            StatusRow(Icons.Default.Folder, "秒记同步文件夹", "请选 Syncthing 的「秒记中枢」（勿选旧平铺「秒记」）", folderChosen) {
                 OutlinedButton(onClick = onPickFolder, modifier = Modifier.fillMaxWidth()) {
-                    Text(if (folderChosen) "已选择，点这里更换" else "选一个会同步到电脑的文件夹")
+                    Text(if (folderChosen) "已选择，点这里更换" else "选电脑上的「秒记中枢」同步文件夹")
                 }
             }
             StatusRow(Icons.Default.Key, "API Key", "用来调用模型判断分类", apiKeySet) {

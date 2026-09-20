@@ -35,6 +35,7 @@ import com.linkn.screenintake.capture.ScreenIntakeAccessibilityService
 import com.linkn.screenintake.capture.PendingCaptureNotifier
 import com.linkn.screenintake.meeting.MeetingRecorderService
 import com.linkn.screenintake.report.AiReportNotificationWorker
+import com.linkn.screenintake.store.HubRoot
 import com.linkn.screenintake.store.SyncNotificationWorker
 import com.linkn.screenintake.store.LocalDataIndexWorker
 import com.linkn.screenintake.ui.theme.ScreenIntakeTheme
@@ -96,6 +97,7 @@ class MainActivity : ComponentActivity() {
         if (intent?.action == PendingCaptureNotifier.ACTION_OPEN_PENDING) pendingOpenTick.value += 1
         if (intent?.action == MeetingRecorderService.OPEN_MEETINGS) meetingOpenTick.value += 1
         if (intent?.action == AiReportNotificationWorker.OPEN_REPORTS) reportOpenTick.value += 1
+        maybeBindTestHub(intent)
         maybeRequestNotificationPermission()
         maybeRequestCameraPermission()
         folderChosen.value = ScreenIntakeApp.instance.settingsStore.folderUri.isNotBlank()
@@ -197,6 +199,7 @@ class MainActivity : ComponentActivity() {
         if (intent.action == PendingCaptureNotifier.ACTION_OPEN_PENDING) pendingOpenTick.value += 1
         if (intent.action == MeetingRecorderService.OPEN_MEETINGS) meetingOpenTick.value += 1
         if (intent.action == AiReportNotificationWorker.OPEN_REPORTS) reportOpenTick.value += 1
+        maybeBindTestHub(intent)
     }
 
     override fun onResume() {
@@ -212,6 +215,46 @@ class MainActivity : ComponentActivity() {
         // 等下一轮 15 分钟后台任务；后台仍由周期任务负责发现新报告并发通知。
         AiReportNotificationWorker.scanNow(this)
         SyncNotificationWorker.scanNow(this)
+    }
+
+
+    private fun maybeBindTestHub(intent: Intent?) {
+        if (intent?.action != HubRoot.ACTION_BIND_TEST_HUB) return
+        val path = intent.getStringExtra(HubRoot.EXTRA_PATH)?.trim().orEmpty().ifBlank { null }
+        val copyFrom = intent.getStringExtra(HubRoot.EXTRA_COPY_FROM)?.trim().orEmpty().ifBlank { null }
+        val debug = getSharedPreferences("adb_debug", MODE_PRIVATE)
+        HubRoot.bindForTest(this, path, copyFrom).onSuccess { result ->
+            val ok = ScreenIntakeApp.instance.settingsStore.setFolderUriCommit(result.uri)
+            com.linkn.screenintake.store.SystemStatus.success(this, "读取")
+            LocalDataIndexWorker.refresh(this)
+            folderChosen.value = true
+            resumeTick.value += 1
+            val readable = com.linkn.screenintake.store.LedgerReader.folderAccessible(this, result.uri)
+            debug.edit()
+                .putString("last_bind_path", result.absolutePath)
+                .putString("last_bind_uri", result.uri)
+                .putString("last_bind_mode", result.mode)
+                .putString("last_bind_tried", result.tried.joinToString("|").take(500))
+                .putBoolean("last_bind_ok", true)
+                .putBoolean("prefs_commit_ok", ok)
+                .putBoolean("folder_accessible", readable)
+                .putString("last_bind_error", "")
+                .putLong("last_bind_at", System.currentTimeMillis())
+                .commit()
+            Toast.makeText(
+                this,
+                "测试同步根已绑定\n" + result.absolutePath + "\nmode=" + result.mode + " 可读=" + readable,
+                Toast.LENGTH_LONG
+            ).show()
+        }.onFailure { err ->
+            debug.edit()
+                .putString("last_bind_path", path ?: copyFrom ?: "")
+                .putBoolean("last_bind_ok", false)
+                .putString("last_bind_error", err.message ?: "unknown")
+                .putLong("last_bind_at", System.currentTimeMillis())
+                .commit()
+            Toast.makeText(this, "绑定失败: " + (err.message ?: "unknown"), Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun maybeRequestNotificationPermission() {

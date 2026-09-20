@@ -74,7 +74,7 @@ fun MeetingScreen(resumeTick: Int) {
     val player = remember { MediaPlayer() }
 
     DisposableEffect(player) { onDispose { runCatching { player.release() } } }
-    LaunchedEffect(resumeTick, live.busy) {
+    LaunchedEffect(resumeTick, live.busy, folder) {
         if (!live.busy) {
             runCatching {
                 records = withContext(Dispatchers.IO) { repo.recover(); repo.list(folder) }

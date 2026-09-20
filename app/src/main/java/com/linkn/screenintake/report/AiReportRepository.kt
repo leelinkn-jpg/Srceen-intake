@@ -1,9 +1,12 @@
 package com.linkn.screenintake.report
+import com.linkn.screenintake.store.HubIO
+import com.linkn.screenintake.store.HubRoot
 
 import android.content.Context
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import com.linkn.screenintake.store.RecordStore
+import com.linkn.screenintake.store.StorageLayout
 import com.linkn.screenintake.store.FileSnapshotCache
 import org.json.JSONArray
 import org.json.JSONObject
@@ -45,7 +48,7 @@ class AiReportRepository(private val context: Context) {
     @Synchronized
     fun list(folderUri: String): List<AiReport> {
         if (folderUri.isBlank()) return emptyList()
-        val root = DocumentFile.fromTreeUri(context, Uri.parse(folderUri)) ?: return emptyList()
+        val root = HubRoot.resolve(context, folderUri) ?: return emptyList()
         val reportDir = root.findFile(ReportDomain.OVERALL.directory) ?: return emptyList()
         val files = reportDir.listFiles().filter { file ->
                 file.isFile && file.name?.endsWith(".json", true) == true &&
@@ -75,22 +78,68 @@ class AiReportRepository(private val context: Context) {
     }
 
     fun latest(folderUri: String): AiReport? = list(folderUri).firstOrNull()
+
+    fun listTodayReceipts(folderUri: String): List<Pair<String, String>> {
+        if (folderUri.isBlank()) return emptyList()
+        val root = root(folderUri, false) ?: return emptyList()
+        val dir = root.findFile("回执") ?: return emptyList()
+        val today = java.time.LocalDate.now().toString()
+        return dir.listFiles().filter { it.isFile && (it.name?.startsWith(today) == true || it.name?.contains(today) == true) }
+            .sortedByDescending { it.lastModified() }
+            .mapNotNull { file ->
+                val name = file.name ?: return@mapNotNull null
+                val body = FileSnapshotCache.readFile(context, file).orEmpty().take(400)
+                name to body
+            }
+    }
+
+    fun hasDomainNote(folderUri: String, reportId: String, domainWire: String): Boolean {
+        val root = root(folderUri, false) ?: return false
+        val notes = root.findFile("反馈")?.findFile("notes") ?: return false
+        val prefix = "${safe(reportId)}_${safe(domainWire)}_"
+        return notes.listFiles().any { it.isFile && it.name?.startsWith(prefix) == true }
+    }
+
+    fun openReportActionIds(folderUri: String): Set<String> {
+        val text = runCatching {
+            val r = HubRoot.resolve(context, folderUri) ?: return emptySet()
+            val file = StorageLayout.readFile(r, "待办.md") ?: return emptySet()
+            FileSnapshotCache.readFile(context, file).orEmpty()
+        }.getOrDefault("")
+        return Regex("<!--AI_ACTION:([A-Za-z0-9._-]+)-->").findAll(text).map { it.groupValues[1] }.toSet()
+    }
+
     fun isRead(report: AiReport) = prefs.getInt("read:${report.id}", 0) >= report.revision
     fun markRead(report: AiReport) { prefs.edit().putInt("read:${report.id}", report.revision).apply() }
     fun unreadCount(reports: List<AiReport>) = reports.count { !isRead(it) }
     fun wasNotified(report: AiReport) = prefs.getInt("notified:${report.id}", 0) >= report.revision
     fun markNotified(report: AiReport) { prefs.edit().putInt("notified:${report.id}", report.revision).apply() }
 
+    /**
+     * 回写建议反馈。
+     * @param accepted true=确认给 Mini；false=忽略
+     * @param createTodo 仅在 accepted 时有效：是否同时写入待办（核实类确认可 false）
+     */
     @Synchronized
-    fun respond(folderUri: String, report: AiReport, action: ReportAction, accepted: Boolean) = synchronized(responseLock) {
+    fun respond(
+        folderUri: String,
+        report: AiReport,
+        action: ReportAction,
+        accepted: Boolean,
+        createTodo: Boolean = accepted
+    ) = synchronized(responseLock) {
         require(action.id.isNotBlank()) { "建议动作缺少编号" }
         val existing = feedback(folderUri, report.id, action.id)
         if (existing == "accepted" || existing == "rejected") return@synchronized
-        if (accepted) {
+        if (accepted && createTodo) {
             RecordStore(context).addReportTodo(folderUri, action.id, action.title, action.reason,
                 normalizeDomain(action.domain), action.dueAt)
         }
-        writeFeedback(folderUri, report, action, if (accepted) "accepted" else "rejected")
+        writeFeedback(
+            folderUri, report, action,
+            if (accepted) "accepted" else "rejected",
+            createTodo = accepted && createTodo
+        )
         listCache.remove(folderUri)
         ReportChangeSignal.bump()
     }
@@ -98,7 +147,7 @@ class AiReportRepository(private val context: Context) {
     fun feedback(folderUri: String, reportId: String, actionId: String): String? = runCatching {
         val root = root(folderUri, false) ?: return@runCatching null
         val file = root.findFile("反馈")?.findFile("${safe(reportId)}_${safe(actionId)}.json") ?: return@runCatching null
-        context.contentResolver.openInputStream(file.uri)?.bufferedReader()?.use {
+        HubIO.openInput(context, file)?.bufferedReader()?.use {
             JSONObject(it.readText()).optString("status").takeIf(String::isNotBlank)
         }
     }.getOrNull()
@@ -152,21 +201,87 @@ class AiReportRepository(private val context: Context) {
         )
     }
 
-    private fun writeFeedback(folderUri: String, report: AiReport, action: ReportAction, status: String) {
+
+    /** 板块自由文本反馈，写入 综合报告/反馈/notes/，供下次跑批与当天回执读取。 */
+    fun submitDomainNote(
+        folderUri: String,
+        reportId: String,
+        domain: ReportDomain,
+        note: String,
+        kind: String
+    ) {
+        require(note.isNotBlank()) { "请填写反馈内容" }
+        require(domain != ReportDomain.OVERALL) { "请选择具体领域" }
+        val root = root(folderUri, true) ?: error("无法创建综合报告目录")
+        val feedback = root.findFile("反馈") ?: root.createDirectory("反馈") ?: error("无法创建反馈目录")
+        val notes = feedback.findFile("notes") ?: feedback.createDirectory("notes") ?: error("无法创建 notes 目录")
+        val ts = System.currentTimeMillis()
+        val name = "${safe(reportId)}_${safe(domain.wire)}_$ts.json"
+        val file = createJsonDoc(notes, name)
+        val json = JSONObject()
+            .put("reportId", reportId)
+            .put("domain", domain.wire)
+            .put("domainLabel", domain.label)
+            .put("note", note.trim())
+            .put("kind", kind)
+            .put("createdAt", ts)
+            .put("schemaVersion", 1)
+        HubIO.openOutput(context, file, "wt")?.use { it.write(json.toString(2).toByteArray()) }
+            ?: error("无法写入反馈")
+        // 事件：方便 Mini 当天出回执（B 方案）
+        runCatching {
+            val tree = HubRoot.resolve(context, folderUri) ?: return@runCatching
+            val system = tree.findFile("系统") ?: tree.createDirectory("系统") ?: return@runCatching
+            val events = system.findFile("事件") ?: system.createDirectory("事件") ?: return@runCatching
+            val ready = events.findFile("反馈就绪") ?: events.createDirectory("反馈就绪") ?: return@runCatching
+            val evName = "${safe(reportId)}_${safe(domain.wire)}_$ts.json"
+            val ev = runCatching { createJsonDoc(ready, evName) }.getOrNull() ?: return@runCatching
+            val body = JSONObject().put("type", "domain_note").put("reportId", reportId)
+                .put("domain", domain.wire).put("notePath", "综合报告/反馈/notes/" + (file.name ?: name))
+                .put("createdAt", ts).toString(2)
+            HubIO.openOutput(context, ev, "wt")?.use { it.write(body.toByteArray()) }
+        }
+        ReportChangeSignal.bump()
+    }
+
+    private fun writeFeedback(
+        folderUri: String,
+        report: AiReport,
+        action: ReportAction,
+        status: String,
+        createTodo: Boolean = false
+    ) {
         val root = root(folderUri, true) ?: error("无法创建综合报告目录")
         val dir = root.findFile("反馈") ?: root.createDirectory("反馈") ?: error("无法创建报告反馈目录")
         val name = "${safe(report.id)}_${safe(action.id)}.json"
-        val file = dir.findFile(name) ?: dir.createFile("application/json", name) ?: error("无法创建反馈文件")
+        val file = dir.findFile(name) ?: createJsonDoc(dir, name)
         val json = JSONObject().put("reportId", report.id).put("actionId", action.id).put("status", status)
+            .put("createTodo", createTodo)
             .put("respondedAt", System.currentTimeMillis()).put("title", action.title)
-        context.contentResolver.openOutputStream(file.uri, "wt")?.use { it.write(json.toString(2).toByteArray()) }
+        HubIO.openOutput(context, file, "wt")?.use { it.write(json.toString(2).toByteArray()) }
             ?: error("无法写入报告反馈")
     }
 
     private fun root(folderUri: String, create: Boolean): DocumentFile? {
-        val tree = DocumentFile.fromTreeUri(context, Uri.parse(folderUri)) ?: return null
+        val tree = HubRoot.resolve(context, folderUri) ?: return null
         return tree.findFile("综合报告") ?: if (create) tree.createDirectory("综合报告") else null
     }
+
+    /** SAF 常把 mime=json 再追加 .json；file:// 则按完整文件名创建。 */
+    private fun createJsonDoc(dir: DocumentFile, fileNameWithJson: String): DocumentFile {
+        val clean = fileNameWithJson.removeSuffix(".json") + ".json"
+        if (dir.uri.scheme == "file") {
+            val parent = java.io.File(dir.uri.path ?: error("无效目录"))
+            val target = java.io.File(parent, clean)
+            if (!target.exists()) check(target.createNewFile()) { "无法创建 $clean" }
+            return DocumentFile.fromFile(target)
+        }
+        val base = clean.removeSuffix(".json")
+        val created = dir.createFile("application/json", base) ?: error("无法创建 $clean")
+        // 若仍出现双后缀，用真实名继续写（内容优先）
+        return created
+    }
+
     private fun safe(value: String) = value.replace(Regex("[^A-Za-z0-9._-]"), "_").take(100)
     private fun sha256(value: String): String = MessageDigest.getInstance("SHA-256")
         .digest(value.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }

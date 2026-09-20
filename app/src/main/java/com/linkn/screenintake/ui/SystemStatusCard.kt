@@ -45,7 +45,7 @@ internal fun SystemStatusCard() {
             Text("系统状态", style = MaterialTheme.typography.titleMedium)
             Text("版本 ${BuildConfig.VERSION_NAME} · ${BuildConfig.BUILD_TYPE}\n构建 ${BuildConfig.BUILD_STAMP}", style = MaterialTheme.typography.bodySmall)
             Text("目录：${android.net.Uri.decode(ScreenIntakeApp.instance.settingsStore.folderUri.substringAfterLast('/'))}", style = MaterialTheme.typography.bodySmall)
-            Text(prefs.getString("report_job", "报告状态等待检查").orEmpty())
+            Text("报告任务：" + prefs.getString("report_job", "等待检查").orEmpty())
             times.forEach { (stage, date, error) ->
                 Text("$stage：${error ?: date}", color = if (error == null) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error)
             }

@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.Button
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenuItem
@@ -102,6 +103,7 @@ fun TodoListScreen(resumeTick: Int, domainFilter: String? = null) {
     val folderUri = ScreenIntakeApp.instance.settingsStore.folderUri
     var todos by remember { mutableStateOf(UiDataCache.todos) }
     var editingTodo by remember { mutableStateOf<TodoItem?>(null) }
+    var creatingTodo by remember { mutableStateOf(false) }
     // 勾选之后不直接删掉——挪到「已办」这个子列表里，既让「待办」列表不被做完的事情占地方，
     // 又不会真的丢掉记录（跟这个 App 其它地方"不静默丢内容"的原则一致），取消勾选还能挪回来。
     var selectedBucket by remember(domainFilter) { mutableStateOf(if (domainFilter == null) "工作" else "待办") }
@@ -165,6 +167,7 @@ fun TodoListScreen(resumeTick: Int, domainFilter: String? = null) {
             }
         }
     }
+    Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize()) {
         if (operationError.isNotBlank()) Text(operationError, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp), color = MaterialTheme.colorScheme.error)
         UnifiedSectionTabs(
@@ -188,6 +191,22 @@ fun TodoListScreen(resumeTick: Int, domainFilter: String? = null) {
             Box(Modifier.weight(1f).fillMaxWidth()) { TodoRows(visible, selectedBucket) }
         }
     }
+        FloatingActionButton(
+            onClick = { creatingTodo = true },
+            modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp)
+        ) { Icon(Icons.Default.Add, contentDescription = "新建待办") }
+    }
+
+    if (creatingTodo) {
+        TodoCreateDialog(
+            defaultDomain = domainFilter ?: "工作",
+            onDismiss = { creatingTodo = false },
+            onCreate = { text, domain, dueAt ->
+                creatingTodo = false
+                perform { RecordStore(context).addManualTodo(folderUri, text, domain, dueAt) }
+            }
+        )
+    }
 
     editingTodo?.let { todo ->
         TodoEditDialog(
@@ -202,6 +221,56 @@ fun TodoListScreen(resumeTick: Int, domainFilter: String? = null) {
                 perform { RecordStore(context).deleteTodo(folderUri, todo) }
             }
         )
+    }
+}
+
+
+@Composable
+private fun TodoCreateDialog(
+    defaultDomain: String,
+    onDismiss: () -> Unit,
+    onCreate: (text: String, domain: String, dueAt: String) -> Unit
+) {
+    var text by remember { mutableStateOf("") }
+    var domain by remember { mutableStateOf(if (defaultDomain == "工作") "工作" else "其他") }
+    var dueAt by remember {
+        mutableStateOf(
+            java.time.LocalDateTime.now().plusDays(1).withHour(9).withMinute(0).withSecond(0).withNano(0).toString()
+        )
+    }
+    val context = LocalContext.current
+    Dialog(onDismissRequest = onDismiss) {
+        Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+            Column(Modifier.padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("新建待办", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                OutlinedTextField(value = text, onValueChange = { text = it }, label = { Text("内容") }, modifier = Modifier.fillMaxWidth())
+                Text("类型", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("工作", "其他").forEach { d ->
+                        FilterChip(selected = domain == d, onClick = { domain = d }, label = { Text(d) })
+                    }
+                }
+                OutlinedTextField(
+                    value = dueAt.replace('T', ' '), onValueChange = {}, readOnly = true,
+                    label = { Text("提醒时间") }, modifier = Modifier.fillMaxWidth(),
+                    trailingIcon = {
+                        TextButton(onClick = {
+                            val old = runCatching { java.time.LocalDateTime.parse(dueAt) }.getOrNull()
+                                ?: java.time.LocalDateTime.now().plusDays(1).withHour(9).withMinute(0)
+                            android.app.DatePickerDialog(context, { _, y, m, d ->
+                                android.app.TimePickerDialog(context, { _, h, minute ->
+                                    dueAt = java.time.LocalDateTime.of(y, m + 1, d, h, minute).toString()
+                                }, old.hour, old.minute, true).show()
+                            }, old.year, old.monthValue - 1, old.dayOfMonth).show()
+                        }) { Text("选择") }
+                    }
+                )
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) { Text("取消") }
+                    Button(onClick = { onCreate(text.trim(), domain, dueAt) }, enabled = text.isNotBlank() && dueAt.isNotBlank()) { Text("创建") }
+                }
+            }
+        }
     }
 }
 
@@ -290,6 +359,7 @@ fun NoteListScreen(resumeTick: Int, domainFilter: String? = null) {
     val folderUri = ScreenIntakeApp.instance.settingsStore.folderUri
     var notes by remember { mutableStateOf(UiDataCache.notes) }
     var editingNote by remember { mutableStateOf<NoteItem?>(null) }
+    var creatingNote by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     suspend fun reload() {
@@ -318,6 +388,7 @@ fun NoteListScreen(resumeTick: Int, domainFilter: String? = null) {
     val domains = listOf("工作", "其他")
     val pagerState = rememberSyncedSectionPagerState(if (selectedDomain == "工作") 0 else 1, 2) { selectedDomain = domains[it] }
 
+    Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize()) {
         if (domainFilter == null) {
             UnifiedSectionTabs(
@@ -333,11 +404,31 @@ fun NoteListScreen(resumeTick: Int, domainFilter: String? = null) {
                 onSelected = { selectedDomain = domains[it] },
                 pagerState = pagerState
             )
+            SectionPager(pagerState, Modifier.weight(1f).fillMaxWidth()) { page -> NoteRows(notesFor(domains[page]), domains[page]) }
         } else {
-            NoteRows(notes.filter { it.domain == domainFilter }, domainFilter.orEmpty())
-            return@Column
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                NoteRows(notes.filter { it.domain == domainFilter }, domainFilter.orEmpty())
+            }
         }
-        SectionPager(pagerState, Modifier.weight(1f).fillMaxWidth()) { page -> NoteRows(notesFor(domains[page]), domains[page]) }
+    }
+        FloatingActionButton(
+            onClick = { creatingNote = true },
+            modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp)
+        ) { Icon(Icons.Default.Add, contentDescription = "新建灵感") }
+    }
+
+    if (creatingNote) {
+        NoteCreateDialog(
+            defaultDomain = domainFilter ?: selectedDomain,
+            onDismiss = { creatingNote = false },
+            onCreate = { content, domain ->
+                creatingNote = false
+                scope.launch(Dispatchers.IO) {
+                    RecordStore(context).addManualNote(folderUri, content, domain)
+                    reload()
+                }
+            }
+        )
     }
 
     editingNote?.let { note ->
@@ -359,6 +450,35 @@ fun NoteListScreen(resumeTick: Int, domainFilter: String? = null) {
                 }
             }
         )
+    }
+}
+
+
+@Composable
+private fun NoteCreateDialog(
+    defaultDomain: String,
+    onDismiss: () -> Unit,
+    onCreate: (content: String, domain: String) -> Unit
+) {
+    var content by remember { mutableStateOf("") }
+    var domain by remember { mutableStateOf(if (defaultDomain == "工作") "工作" else "其他") }
+    Dialog(onDismissRequest = onDismiss) {
+        Card(modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+            Column(Modifier.padding(20.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("新建灵感", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                OutlinedTextField(value = content, onValueChange = { content = it }, label = { Text("内容") }, modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp), minLines = 4)
+                Text("领域", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("工作", "其他").forEach { d ->
+                        FilterChip(selected = domain == d, onClick = { domain = d }, label = { Text(d) })
+                    }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) { Text("取消") }
+                    Button(onClick = { onCreate(content.trim(), domain) }, enabled = content.isNotBlank()) { Text("创建") }
+                }
+            }
+        }
     }
 }
 

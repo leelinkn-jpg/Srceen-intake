@@ -1,4 +1,6 @@
 package com.linkn.screenintake.health
+import com.linkn.screenintake.store.HubIO
+import com.linkn.screenintake.store.HubRoot
 
 import android.content.Context
 import android.net.Uri
@@ -70,7 +72,7 @@ class HealthDataRepository(private val context: Context) {
         val file = dir.createFile("application/json", "$id.json") ?: error("无法创建待确认记录")
         val body = JSONObject().put("id", id).put("status", "pending").put("summary", summary)
             .put("sourcePhoto", sourcePhoto).put("suggestedAt", SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.CHINA).format(Date())).toString(2)
-        context.contentResolver.openOutputStream(file.uri, "wt")?.use { it.write(body.toByteArray()) } ?: error("无法写入待确认记录")
+        HubIO.openOutput(context, file, "wt")?.use { it.write(body.toByteArray()) } ?: error("无法写入待确认记录")
     }
 
     fun growthUsageCandidates(folder: String): List<GrowthUsageCandidate> = pendingFiles(folder, "成长使用待确认") { file, j ->
@@ -97,7 +99,7 @@ class HealthDataRepository(private val context: Context) {
         val file = healthFile(folder, "酒精记录.json", true) ?: error("无法创建酒精记录")
         val array = JSONArray(records.map { it.toJson() })
         val body = JSONObject().put("schemaVersion", 1).put("updatedAt", System.currentTimeMillis()).put("records", array).toString(2)
-        context.contentResolver.openOutputStream(file.uri, "wt")?.use { it.write(body.toByteArray()) } ?: error("无法写入酒精记录")
+        HubIO.openOutput(context, file, "wt")?.use { it.write(body.toByteArray()) } ?: error("无法写入酒精记录")
     }
 
     private fun <T> pendingFiles(folder: String, directory: String, map: (DocumentFile, JSONObject) -> T): List<T> = runCatching {
@@ -117,14 +119,14 @@ class HealthDataRepository(private val context: Context) {
         val dir = health.findFile(feedbackDir) ?: health.createDirectory(feedbackDir) ?: error("无法创建反馈目录")
         val file = dir.findFile("$id.json") ?: dir.createFile("application/json", "$id.json") ?: error("无法创建反馈")
         val body = JSONObject().put("id", id).put("status", status).put("respondedAt", System.currentTimeMillis()).toString(2)
-        context.contentResolver.openOutputStream(file.uri, "wt")?.use { it.write(body.toByteArray()) } ?: error("无法写入反馈")
+        HubIO.openOutput(context, file, "wt")?.use { it.write(body.toByteArray()) } ?: error("无法写入反馈")
     }
 
     private fun healthFile(folder: String, name: String, create: Boolean): DocumentFile? {
         val root = root(folder) ?: return null
         return if (create) StorageLayout.writableFile(context, root, name, "application/json") else StorageLayout.readFile(root, name)
     }
-    private fun root(folder: String) = folder.takeIf { it.isNotBlank() }?.let { DocumentFile.fromTreeUri(context, Uri.parse(it)) }
+    private fun root(folder: String) = folder.takeIf { it.isNotBlank() }?.let { HubRoot.resolve(context, it) }
     private fun JSONObject.optIntOrNull(vararg keys: String): Int? = keys.firstNotNullOfOrNull { key ->
         when (val value = opt(key)) { is Number -> value.toInt(); is String -> value.toIntOrNull(); else -> null }
     }

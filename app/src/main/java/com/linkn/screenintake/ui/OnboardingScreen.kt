@@ -96,7 +96,7 @@ fun OnboardingScreen(
         StepCard(
             number = 3,
             title = "填 API Key、选保存文件夹",
-            description = "进入应用后点右上角设置。文件夹建议选一个会同步到电脑的目录（比如坚果云同步的那个）。"
+            description = "进入应用后点右上角设置。文件夹必须选 Syncthing 同步的「秒记中枢」（桌面那个带财务/健康/工作/成长子目录的），不要选旧的平铺「秒记」。"
         )
 
         StepCard(

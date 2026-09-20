@@ -19,6 +19,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.AlertDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -95,7 +97,14 @@ fun AiReportCenterScreen(resumeTick: Int) {
     }
     val pagerState = rememberSyncedSectionPagerState(selectedIndex, tabLabels.size, ::selectPeriod)
 
+    var receipts by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    LaunchedEffect(resumeTick, change) {
+        receipts = withContext(Dispatchers.IO) { repo.listTodayReceipts(folder) }
+    }
     Column(Modifier.fillMaxSize()) {
+        if (receipts.isNotEmpty()) {
+            TodayReceiptCard(receipts)
+        }
         UnifiedSectionTabs(tabLabels, selectedIndex, ::selectPeriod, pagerState)
         SectionPager(pagerState, Modifier.fillMaxSize()) { page ->
             val pagePeriod = if (page == 0) null else ReportPeriod.entries[page - 1]
@@ -140,6 +149,15 @@ fun DomainAdviceScreen(domain: ReportDomain, resumeTick: Int) {
     LaunchedEffect(resumeTick, change) { reload() }
     val entries = reports.mapNotNull { report -> report.sections.firstOrNull { it.domain == domain }?.let { report to it } }
     val feedbackState = rememberReportFeedback(repo, folder, reports, change)
+    var openActionIds by remember(folder) { mutableStateOf(emptySet<String>()) }
+    var domainHasNote by remember(folder, domain) { mutableStateOf(false) }
+    val latestReportId = entries.firstOrNull()?.first?.id.orEmpty()
+    LaunchedEffect(folder, latestReportId, domain, change) {
+        openActionIds = withContext(Dispatchers.IO) { repo.openReportActionIds(folder) }
+        if (latestReportId.isNotBlank()) {
+            domainHasNote = withContext(Dispatchers.IO) { repo.hasDomainNote(folder, latestReportId, domain.wire) }
+        }
+    }
     if (entries.isEmpty()) {
         Text("暂无${domain.label}建议", modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
         return
@@ -158,19 +176,24 @@ fun DomainAdviceScreen(domain: ReportDomain, resumeTick: Int) {
                         if (section.content.isNotBlank()) Text(section.content, style = MaterialTheme.typography.bodyMedium)
                         Text("数据截至：${report.dataCutoff.ifBlank { report.periodEnd }}", style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        DomainFeedbackButton(repo, folder, report.id, domain) { msg -> error = msg; if (msg.isEmpty()) reload() }
                     }
                 }
             }
             val actions = if (feedbackState.loaded) report.actions.filter { action ->
-                actionDomain(action.domain) == domain && isReportActionPending(feedbackState.values[report.id to action.id])
+                actionDomain(action.domain) == domain &&
+                    isReportActionPending(feedbackState.values[report.id to action.id]) &&
+                    action.id.replace(Regex("[^A-Za-z0-9._-]"), "_").take(100) !in openActionIds
             } else emptyList()
             items(actions, key = { "${report.id}:${it.id}" }) { action ->
                 Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     Text(action.title, style = MaterialTheme.typography.titleSmall)
                     if (action.reason.isNotBlank()) Text(action.reason, style = MaterialTheme.typography.bodySmall)
+                    if (domainHasNote) Text("本板块已有文字反馈，纠正类一般不必再写入待办",
+                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = { scope.launch { runCatching { withContext(Dispatchers.IO) { repo.respond(folder, report, action, true) } }
-                            .onSuccess { reload() }.onFailure { error = it.message ?: "写入失败" } } }) { Text("确认写入待办") }
+                        Button(onClick = { scope.launch { runCatching { withContext(Dispatchers.IO) { repo.respond(folder, report, action, true, createTodo = true) } }
+                            .onSuccess { reload() }.onFailure { error = it.message ?: "写入失败" } } }) { Text("写入待办") }
                         TextButton(onClick = { scope.launch { runCatching { withContext(Dispatchers.IO) { repo.respond(folder, report, action, false) } }
                             .onSuccess { reload() }.onFailure { error = it.message ?: "保存失败" } } }) { Text("忽略") }
                     }
@@ -205,17 +228,27 @@ fun DomainAdvicePanel(domain: ReportDomain, resumeTick: Int) {
             Text(section.title, style = MaterialTheme.typography.titleMedium)
             if (section.summary.isNotBlank()) Text(section.summary)
             if (section.content.isNotBlank()) Text(section.content)
+            DomainFeedbackButton(repo, folder, current.id, domain) { msg -> error = msg; if (msg.isEmpty()) refresh++ }
         } }
         if (error.isNotBlank()) Text(error, color = MaterialTheme.colorScheme.error)
+        var openActionIds by remember(folder) { mutableStateOf(emptySet<String>()) }
+        var domainHasNote by remember(folder, current.id, domain) { mutableStateOf(false) }
+        LaunchedEffect(folder, current.id, domain, change) {
+            openActionIds = withContext(Dispatchers.IO) { repo.openReportActionIds(folder) }
+            domainHasNote = withContext(Dispatchers.IO) { repo.hasDomainNote(folder, current.id, domain.wire) }
+        }
         if (feedbackState.loaded) current.actions.filter {
-            actionDomain(it.domain) == domain && isReportActionPending(feedbackState.values[current.id to it.id])
+            actionDomain(it.domain) == domain && isReportActionPending(feedbackState.values[current.id to it.id]) &&
+                it.id.replace(Regex("[^A-Za-z0-9._-]"), "_").take(100) !in openActionIds
         }.forEach { action ->
             Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 Text(action.title, style = MaterialTheme.typography.titleSmall)
                 if (action.reason.isNotBlank()) Text(action.reason, style = MaterialTheme.typography.bodySmall)
+                if (domainHasNote) Text("本板块已有文字反馈，纠正类一般不必再写入待办",
+                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { scope.launch { runCatching { withContext(Dispatchers.IO) { repo.respond(folder, current, action, true) } }
-                        .onSuccess { refresh++; error = "" }.onFailure { error = it.message ?: "保存失败，请重试" } } }) { Text("确认写入待办") }
+                    Button(onClick = { scope.launch { runCatching { withContext(Dispatchers.IO) { repo.respond(folder, current, action, true, createTodo = true) } }
+                        .onSuccess { refresh++; error = "" }.onFailure { error = it.message ?: "保存失败，请重试" } } }) { Text("写入待办") }
                     TextButton(onClick = { scope.launch { runCatching { withContext(Dispatchers.IO) { repo.respond(folder, current, action, false) } }
                         .onSuccess { refresh++; error = "" }.onFailure { error = it.message ?: "保存失败，请重试" } } }) { Text("忽略") }
                 }
@@ -301,6 +334,7 @@ private fun ReportDetailDialog(report: AiReport, repo: AiReportRepository, folde
                                 Text(section.content, style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
+                            DomainFeedbackButton(repo, folder, report.id, section.domain) { msg -> error = msg }
                         }
                     }
                 }
@@ -317,7 +351,7 @@ private fun ReportDetailDialog(report: AiReport, repo: AiReportRepository, folde
                         Text(action.title, style = MaterialTheme.typography.titleSmall)
                         if (action.reason.isNotBlank()) Text(action.reason, style = MaterialTheme.typography.bodySmall)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = { scope.launch { runCatching { withContext(Dispatchers.IO) { repo.respond(folder, report, action, true) } }
+                            Button(onClick = { scope.launch { runCatching { withContext(Dispatchers.IO) { repo.respond(folder, report, action, true, createTodo = true) } }
                                 .onSuccess { actionFeedback = actionFeedback.orEmpty() + (action.id to "accepted") }.onFailure { error = it.message ?: "写入失败" } } }) { Text("写入待办") }
                             TextButton(onClick = { scope.launch { runCatching { withContext(Dispatchers.IO) { repo.respond(folder, report, action, false) } }
                                 .onSuccess { actionFeedback = actionFeedback.orEmpty() + (action.id to "rejected") }.onFailure { error = it.message ?: "保存失败" } } }) { Text("忽略") }
@@ -331,8 +365,95 @@ private fun ReportDetailDialog(report: AiReport, repo: AiReportRepository, folde
     }
 }
 
+
+
+@Composable
+private fun TodayReceiptCard(receipts: List<Pair<String, String>>) {
+    Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("今日回执", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            Text("Mini 已收到你的反馈（完整改口径仍在下次报告）", style = MaterialTheme.typography.bodySmall)
+            receipts.take(3).forEach { (name, body) ->
+                Text(name, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                if (body.isNotBlank()) Text(body.lineSequence().take(4).joinToString("\n"),
+                    style = MaterialTheme.typography.bodySmall, maxLines = 4)
+            }
+        }
+    }
+}
+
+private val feedbackKinds = listOf("纠正事实", "补充上下文", "别再建议这类", "其他")
+
+@Composable
+private fun DomainFeedbackButton(
+    repo: AiReportRepository,
+    folder: String,
+    reportId: String,
+    domain: ReportDomain,
+    onDone: (String) -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    var open by remember { mutableStateOf(false) }
+    var note by remember { mutableStateOf("") }
+    var kind by remember { mutableStateOf(feedbackKinds[0]) }
+    var saving by remember { mutableStateOf(false) }
+    TextButton(onClick = { open = true }, enabled = reportId.isNotBlank()) { Text("反馈") }
+    if (open) {
+        AlertDialog(
+            onDismissRequest = { if (!saving) open = false },
+            title = { Text("反馈 · ${domain.label}") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("写给下一轮分析的口径说明（不改账本、不自动建待办）", style = MaterialTheme.typography.bodySmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        feedbackKinds.forEach { label ->
+                            TextButton(onClick = { kind = label }) {
+                                Text(if (kind == label) "·$label" else label, style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                    }
+                    OutlinedTextField(
+                        value = note,
+                        onValueChange = { note = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 3,
+                        placeholder = { Text("例如：那几条卖出是试单，备注已写明非真实…") }
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(enabled = !saving && note.isNotBlank(), onClick = {
+                    saving = true
+                    scope.launch {
+                        val result = runCatching {
+                            withContext(Dispatchers.IO) { repo.submitDomainNote(folder, reportId, domain, note, kind) }
+                        }
+                        saving = false
+                        result.onSuccess {
+                            open = false
+                            note = ""
+                            onDone("")
+                        }.onFailure { onDone(it.message ?: "反馈失败") }
+                    }
+                }) { Text(if (saving) "提交中…" else "提交") }
+            },
+            dismissButton = { TextButton(enabled = !saving, onClick = { open = false }) { Text("取消") } }
+        )
+    }
+}
+
 private fun formatTime(value: Long) = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.CHINA).format(Date(value))
 private fun actionDomain(value: String) = when (value.lowercase()) {
     "finance", "财务" -> ReportDomain.FINANCE; "health", "健康" -> ReportDomain.HEALTH
     "growth", "成长", "习惯" -> ReportDomain.GROWTH; else -> ReportDomain.WORK
+}
+
+/** 已写入待办（AI_ACTION）的建议不再展示；有板块 notes 时「写入待办」可提示。 */
+private fun filterPendingActions(
+    actions: List<com.linkn.screenintake.report.ReportAction>,
+    feedback: Map<String, String?>,
+    openActionIds: Set<String>
+) = actions.filter { action ->
+    isReportActionPending(feedback[action.id]) && action.id.replace(Regex("[^A-Za-z0-9._-]"), "_").take(100) !in openActionIds
 }

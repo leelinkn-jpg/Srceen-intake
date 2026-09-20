@@ -94,8 +94,8 @@ object StorageLayout {
     }
 
     private fun copyFile(context: Context, source: DocumentFile, target: DocumentFile) {
-        context.contentResolver.openInputStream(source.uri)?.use { input ->
-            context.contentResolver.openOutputStream(target.uri, "wt")?.use { output -> input.copyTo(output) }
+        HubIO.openInput(context, source)?.use { input ->
+            HubIO.openOutput(context, target, "wt")?.use { output -> input.copyTo(output) }
                 ?: error("无法写入${target.name}")
         } ?: error("无法读取${source.name}")
     }

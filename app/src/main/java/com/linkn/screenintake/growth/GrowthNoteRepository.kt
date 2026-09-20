@@ -1,4 +1,5 @@
 package com.linkn.screenintake.growth
+import com.linkn.screenintake.store.HubRoot
 
 import android.content.Context
 import android.net.Uri
@@ -12,7 +13,7 @@ data class GrowthNoteListing(val collections: List<GrowthNoteCollection>, val no
 /** 成长笔记只读展示：只读取中枢正式目录“成长/笔记”。 */
 class GrowthNoteRepository(private val context: Context) {
     fun list(folderUri: String, relativePath: String = ""): GrowthNoteListing {
-        val root = DocumentFile.fromTreeUri(context, Uri.parse(folderUri))
+        val root = HubRoot.resolve(context, folderUri)
             ?: error("笔记目录授权已失效，请在设置中检查文件夹")
         val noteRoot = root.findFile("成长")?.takeIf { it.isDirectory }?.findFile("笔记")
             ?.takeIf { it.isDirectory }
@@ -36,7 +37,7 @@ class GrowthNoteRepository(private val context: Context) {
     }
 
     fun content(folderUri: String, note: GrowthNote): String {
-        val root = DocumentFile.fromTreeUri(context, Uri.parse(folderUri)) ?: error("笔记目录不可访问")
+        val root = HubRoot.resolve(context, folderUri) ?: error("笔记目录不可访问")
         val file = note.path.split('/').filter(String::isNotBlank)
             .fold(root.findFile("成长")?.findFile("笔记") ?: error("笔记目录不可访问")) { parent, part ->
                 parent.findFile(part) ?: error("笔记文件暂时不可读，请刷新后重试")

@@ -1,4 +1,6 @@
 package com.linkn.screenintake.growth
+import com.linkn.screenintake.store.HubIO
+import com.linkn.screenintake.store.HubRoot
 
 import android.content.Context
 import android.net.Uri
@@ -52,14 +54,14 @@ class GrowthEffortRepository(private val context: Context) {
     /** 把项目目标同步为可读的中文目录文件，供 Mini 的成长分析读取。 */
     fun syncActivities(folderUri: String) {
         if (folderUri.isBlank()) return
-        val root = DocumentFile.fromTreeUri(context, Uri.parse(folderUri)) ?: return
+        val root = HubRoot.resolve(context, folderUri) ?: return
         val file = StorageLayout.writableFile(context, root, "项目.json", "application/json")
         val payload = JSONObject()
             .put("schemaVersion", 1)
             .put("updatedAt", System.currentTimeMillis())
             .put("projects", JSONArray(activities().map(GrowthActivity::toJson)))
             .toString(2)
-        context.contentResolver.openOutputStream(file.uri, "wt")?.use {
+        HubIO.openOutput(context, file, "wt")?.use {
             it.write(payload.toByteArray(Charsets.UTF_8))
         } ?: error("无法写入成长项目")
     }
@@ -130,7 +132,7 @@ class GrowthEffortRepository(private val context: Context) {
         val target = directory.findFile(name) ?: directory.createFile(sourceFile.type ?: "application/octet-stream", name)
             ?: error("无法创建学习文件")
         context.contentResolver.openInputStream(source)?.use { input ->
-            context.contentResolver.openOutputStream(target.uri, "wt")?.use { input.copyTo(it) }
+            HubIO.openOutput(context, target, "wt")?.use { input.copyTo(it) }
                 ?: error("无法写入学习文件")
         } ?: error("无法读取所选文件")
         return readArtifact(target, includePreview = false)
@@ -161,7 +163,7 @@ class GrowthEffortRepository(private val context: Context) {
         val directory = effortDir(folderUri, effort, true) ?: error("无法创建成长记录目录")
         val file = directory.findFile("记录.json") ?: directory.createFile("application/json", "记录.json")
             ?: error("无法创建记录文件")
-        context.contentResolver.openOutputStream(file.uri, "wt")?.use {
+        HubIO.openOutput(context, file, "wt")?.use {
             it.write(effort.toJson().toString(2).toByteArray(Charsets.UTF_8))
         } ?: error("无法写入记录文件")
     }
@@ -174,7 +176,7 @@ class GrowthEffortRepository(private val context: Context) {
     private fun readRemoteActivities(folderUri: String): List<GrowthActivity> {
         if (folderUri.isBlank()) return emptyList()
         return runCatching {
-            val root = DocumentFile.fromTreeUri(context, Uri.parse(folderUri)) ?: return@runCatching emptyList()
+            val root = HubRoot.resolve(context, folderUri) ?: return@runCatching emptyList()
             val file = StorageLayout.readFile(root, "项目.json") ?: return@runCatching emptyList()
             val source = JSONObject(FileSnapshotCache.readFile(context, file).orEmpty()).optJSONArray("projects")
                 ?: return@runCatching emptyList()
@@ -192,7 +194,7 @@ class GrowthEffortRepository(private val context: Context) {
         val name = file.name ?: "学习文件"
         val mime = file.type ?: "application/octet-stream"
         val textLike = mime.startsWith("text/") || name.endsWith(".md", true) || name.endsWith(".json", true)
-        val preview = if (includePreview && textLike) context.contentResolver.openInputStream(file.uri)?.bufferedReader()?.use {
+        val preview = if (includePreview && textLike) HubIO.openInput(context, file)?.bufferedReader()?.use {
             val buffer = CharArray(20_000)
             val count = it.read(buffer)
             if (count > 0) String(buffer, 0, count) else ""
@@ -201,7 +203,7 @@ class GrowthEffortRepository(private val context: Context) {
     }
 
     private fun growthRoot(folderUri: String, create: Boolean): DocumentFile? {
-        val root = DocumentFile.fromTreeUri(context, Uri.parse(folderUri)) ?: error("请先选择同步文件夹")
+        val root = HubRoot.resolve(context, folderUri) ?: error("请先选择同步文件夹")
         return if (create) {
             StorageLayout.writableDirectory(context, root, StorageLayout.GROWTH, "成长记录")
         } else {

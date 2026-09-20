@@ -20,6 +20,8 @@
     <!-- 长按音量上/下键悬浮弹出相机小工具 / 文字输入框用，不这个权限没法用 WindowManager
          在别的 App 上面画东西；需要在系统设置里手动开一次，不是普通的运行时权限弹窗 -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- 测试旁路：file:// 绑定 /sdcard/秒记中枢；正式用户仍用 SAF。需用户/adb 授予全部文件访问 -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
 
     <application
         android:name=".ScreenIntakeApp"
@@ -46,6 +48,10 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="com.linkn.screenintake.ACTION_BIND_TEST_HUB" />
+                <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
 
