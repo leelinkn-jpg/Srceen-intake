@@ -367,6 +367,19 @@ fun NoteListScreen(resumeTick: Int, domainFilter: String? = null) {
             .also { UiDataCache.notes = it }
     }
 
+    fun persist(close: () -> Unit, action: () -> Unit) {
+        scope.launch {
+            runCatching { withContext(Dispatchers.IO) { action() } }
+                .onSuccess {
+                    close()
+                    reload()
+                }
+                .onFailure {
+                    Toast.makeText(context, it.message ?: "保存失败", Toast.LENGTH_LONG).show()
+                }
+        }
+    }
+
     val noteChangeTick = DataChangeSignal.forDomain("工作").value
     LaunchedEffect(resumeTick, noteChangeTick) { reload() }
 
@@ -422,10 +435,8 @@ fun NoteListScreen(resumeTick: Int, domainFilter: String? = null) {
             defaultDomain = domainFilter ?: selectedDomain,
             onDismiss = { creatingNote = false },
             onCreate = { content, domain ->
-                creatingNote = false
-                scope.launch(Dispatchers.IO) {
+                persist({ creatingNote = false }) {
                     RecordStore(context).addManualNote(folderUri, content, domain)
-                    reload()
                 }
             }
         )
@@ -436,17 +447,13 @@ fun NoteListScreen(resumeTick: Int, domainFilter: String? = null) {
             note = note,
             onDismiss = { editingNote = null },
             onSave = { newContent, newDomain ->
-                editingNote = null
-                scope.launch(Dispatchers.IO) {
+                persist({ editingNote = null }) {
                     RecordStore(context).updateNote(folderUri, note, newContent, newDomain)
-                    reload()
                 }
             },
             onDelete = {
-                editingNote = null
-                scope.launch(Dispatchers.IO) {
+                persist({ editingNote = null }) {
                     RecordStore(context).deleteNote(folderUri, note)
-                    reload()
                 }
             }
         )
